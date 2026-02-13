@@ -81,29 +81,35 @@ def get_fno_universe():
 
     df = load_master_file()
 
-    # Make sure correct column names
-    df.columns = [col.strip().upper() for col in df.columns]
-
-    # Filter Futures only
-    df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
+    # Normalize column names
     df.columns = df.columns.str.strip().str.upper()
 
-    # Only current month futures
+    # Clean instrument type values
+    df["INSTRUMENT TYPE"] = df["INSTRUMENT TYPE"].astype(str).str.strip()
+
+    # Filter NFO futures only
+    df = df[
+        (df["SEGMENT"] == "NFO") &
+        (df["INSTRUMENT TYPE"].str.startswith("FUT"))
+    ]
+
+    # Only current month futures (-I)
     df = df[df["TRADINGSYM"].str.endswith("-I")]
-    
-    # Keep only first occurrence per symbol
+
+    # Remove duplicates by SYMBOL
     df = df.drop_duplicates(subset=["SYMBOL"])
 
     universe = []
 
     for _, row in df.iterrows():
-        symbol = row["SYMBOL"]
+        tradingsym = row["TRADINGSYM"]
         token = row["TOKEN"]
-        universe.append((symbol, token))
+        universe.append((tradingsym, token))
 
     print("Filtered F&O universe:", len(universe))
 
     return universe
+
 
 # ===============================
 # FETCH MINUTE HISTORY
