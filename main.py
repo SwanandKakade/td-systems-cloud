@@ -105,7 +105,7 @@ def get_fno_universe():
 # FETCH MINUTE HISTORY
 # ===============================
 
-ddef fetch_minute_history(segment, token, compression=60):
+def fetch_minute_history(segment, token, compression=60):
 
     end = datetime.today()
     start = end - timedelta(days=120)
