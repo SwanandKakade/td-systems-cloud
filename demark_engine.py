@@ -32,39 +32,66 @@ class DeMarkEngine:
     # 2️⃣ TD Setup
     # =====================================================
 
-    def compute_setups(self):
-        self.df["buy_setup"] = 0
-        self.df["sell_setup"] = 0
+   def compute_setups(self):
 
-        for i in range(4, len(self.df)):
-            if self.df["close"].iloc[i] < self.df["close"].iloc[i - 4]:
-                self.df.at[self.df.index[i], "buy_setup"] = \
-                    self.df["buy_setup"].iloc[i - 1] + 1
-            else:
-                self.df.at[self.df.index[i], "buy_setup"] = 0
+    self.df["buy_setup"] = 0
+    self.df["sell_setup"] = 0
 
-            if self.df["close"].iloc[i] > self.df["close"].iloc[i - 4]:
-                self.df.at[self.df.index[i], "sell_setup"] = \
-                    self.df["sell_setup"].iloc[i - 1] + 1
-            else:
-                self.df.at[self.df.index[i], "sell_setup"] = 0
+    buy = 0
+    sell = 0
 
-        # Perfected Setup
-        self.df["perfect_buy"] = (
-            (self.df["buy_setup"] == 9) &
-            (
-                (self.df["high"].shift(8) > self.df["high"].shift(6)) |
-                (self.df["high"].shift(8) > self.df["high"].shift(7))
-            )
-        )
+    for i in range(4, len(self.df)):
 
-        self.df["perfect_sell"] = (
-            (self.df["sell_setup"] == 9) &
-            (
-                (self.df["low"].shift(8) < self.df["low"].shift(6)) |
-                (self.df["low"].shift(8) < self.df["low"].shift(7))
-            )
-        )
+        close_now = self.df["close"].iloc[i]
+        close_4 = self.df["close"].iloc[i - 4]
+
+        if close_now < close_4:
+            buy += 1
+            sell = 0
+
+        elif close_now > close_4:
+            sell += 1
+            buy = 0
+
+        else:
+            buy = 0
+            sell = 0
+
+        self.df.at[self.df.index[i], "buy_setup"] = buy
+        self.df.at[self.df.index[i], "sell_setup"] = sell
+
+    # ===============================
+    # PERFECTED SETUP (TRUE PINE STYLE)
+    # ===============================
+
+    self.df["perfect_buy"] = False
+    self.df["perfect_sell"] = False
+
+    for i in range(len(self.df)):
+
+        if self.df["buy_setup"].iloc[i] == 9:
+            # Bar 9 index = i
+            # Bar 6 index = i - 3
+            # Bar 7 index = i - 2
+            # Bar 8 index = i - 1
+
+            if i >= 8:
+                if (
+                    self.df["high"].iloc[i - 1] >
+                    max(self.df["high"].iloc[i - 3],
+                        self.df["high"].iloc[i - 2])
+                ):
+                    self.df.at[self.df.index[i], "perfect_buy"] = True
+
+        if self.df["sell_setup"].iloc[i] == 9:
+
+            if i >= 8:
+                if (
+                    self.df["low"].iloc[i - 1] <
+                    min(self.df["low"].iloc[i - 3],
+                        self.df["low"].iloc[i - 2])
+                ):
+                    self.df.at[self.df.index[i], "perfect_sell"] = True
 
     # =====================================================
     # 3️⃣ Countdown with Cancellation + Recycling
