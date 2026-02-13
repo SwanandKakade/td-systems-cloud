@@ -1,233 +1,237 @@
+import os
 import requests
 import pandas as pd
+from datetime import datetime, timedelta
 import zipfile
 import io
-import os
-from datetime import datetime, timedelta
-from io import StringIO
 
 # ===============================
 # CONFIG
 # ===============================
-SESSION_KEY = os.getenv("DEFINEDGE_SESSION_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
 
-BASE_URL = "https://data.definedgesecurities.com"
-MASTER_FNO_URL = "https://app.definedgesecurities.com/public/nsefno.zip"
+MASTER_URL = "https://app.definedgesecurities.com/public/nsefno.zip"
+BASE_HISTORY_URL = "https://data.definedgesecurities.com/sds/history"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SESSION_KEY = os.getenv("DEFINEDGE_SESSION_KEY")
 
 # ===============================
 # TELEGRAM
 # ===============================
+
 def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram not configured")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
     requests.post(url, data=payload)
 
-# ===============================
-# FETCH F&O UNIVERSE
-# ===============================
-def get_fno_universe():
-    response = requests.get(MASTER_FNO_URL)
 
+# ===============================
+# MASTER FILE (F&O ONLY)
+# ===============================
+
+def get_fno_universe():
+    print("Downloading master file...")
+
+    response = requests.get(MASTER_URL)
     z = zipfile.ZipFile(io.BytesIO(response.content))
     filename = z.namelist()[0]
 
-    # Master file has NO header row
     df = pd.read_csv(z.open(filename), header=None)
 
-    # Assign correct column names manually
     df.columns = [
-        "SEGMENT",
-        "TOKEN",
-        "SYMBOL",
-        "TRADINGSYM",
-        "INSTRUMENTTYPE",
-        "EXPIRY",
-        "TICKSIZE",
-        "LOTSIZE",
-        "OPTIONTYPE",
-        "STRIKE",
-        "PRICEPREC",
-        "MULTIPLIER",
-        "ISIN",
-        "PRICEMULT",
-        "COMPANY"
+        "SEGMENT", "TOKEN", "SYMBOL", "TRADINGSYM",
+        "INSTRUMENT_TYPE", "EXPIRY", "TICKSIZE",
+        "LOTSIZE", "OPTIONTYPE", "STRIKE",
+        "PRICEPREC", "MULTIPLIER",
+        "ISIN", "PRICEMULT", "COMPANY"
     ]
 
-    # Keep only F&O futures (ignore options for now)
-    df = df[df["INSTRUMENTTYPE"].isin(["FUTSTK", "FUTIDX"])]
+    df = df[df["INSTRUMENT_TYPE"].isin(["FUTSTK", "FUTIDX"])]
 
-    return df[["SYMBOL", "TOKEN"]]
+    print("Total F&O contracts:", len(df))
+
+    return df[["SYMBOL", "TOKEN"]].drop_duplicates().values.tolist()
 
 
+# ===============================
+# FETCH MINUTE HISTORY
+# ===============================
 
-def fetch_history(segment, token, interval="120m"):
-    session_key = os.getenv("DEFINEDGE_SESSION_KEY")
-
+def fetch_minute_history(segment, token):
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    url = (
-        f"{BASE_URL}/sds/history/"
-        f"{segment}/{token}/"
-        f"{interval}/"
-        f"{start.strftime('%Y-%m-%d')}/"
-        f"{end.strftime('%Y-%m-%d')}"
-    )
+    url = f"{BASE_HISTORY_URL}/{segment}/{token}/minute/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
     headers = {
-    "authorization": session_key
-            }
-    print("SESSION KEY RAW:", session_key)
-    print("HEADERS:", {"Authorization": session_key})
+        "Authorization": SESSION_KEY
+    }
 
-    print("HISTORY URL:", url)
-
-    response = requests.get(url, headers=headers, timeout=15)
+    response = requests.get(url, headers=headers, timeout=20)
 
     if response.status_code != 200:
-        print("History fetch failed:", response.status_code, response.text)
+        print("History fetch failed:", response.status_code)
         return None
 
-    from io import StringIO
-    df = pd.read_csv(StringIO(response.text))
+    df = pd.read_csv(io.StringIO(response.text))
     return df
 
 
+# ===============================
+# RESAMPLE FUNCTION
+# ===============================
+
+def resample_tf(df, rule):
+    df["DateTime"] = pd.to_datetime(df["DateTime"])
+    df.set_index("DateTime", inplace=True)
+
+    df_tf = df.resample(rule).agg({
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum"
+    }).dropna()
+
+    return df_tf
 
 
 # ===============================
-# TD CALCULATION
+# TD SETUP + COUNTDOWN
 # ===============================
-def calculate_td(df):
-    df = df.copy()
 
-    # TD9 Setup
-    df["buy_setup"] = df["Close"] < df["Close"].shift(4)
-    df["sell_setup"] = df["Close"] > df["Close"].shift(4)
+def td_sequential(df):
 
-    df["buy_count"] = df["buy_setup"].groupby((df["buy_setup"] == False).cumsum()).cumcount() + 1
-    df["buy_count"] = df["buy_count"] * df["buy_setup"]
+    df["TD_Buy_Setup"] = 0
+    df["TD_Sell_Setup"] = 0
+    df["TD_Buy_Count"] = 0
+    df["TD_Sell_Count"] = 0
 
-    df["sell_count"] = df["sell_setup"].groupby((df["sell_setup"] == False).cumsum()).cumcount() + 1
-    df["sell_count"] = df["sell_count"] * df["sell_setup"]
+    buy_setup = 0
+    sell_setup = 0
+    buy_count = 0
+    sell_count = 0
 
-    # TD13 Countdown
-    df["buy_cd"] = df["Close"] <= df["Low"].shift(2)
-    df["sell_cd"] = df["Close"] >= df["High"].shift(2)
+    for i in range(4, len(df)):
 
-    df["buy_cd_count"] = df["buy_cd"].groupby((df["buy_cd"] == False).cumsum()).cumcount() + 1
-    df["buy_cd_count"] = df["buy_cd_count"] * df["buy_cd"]
+        # Setup
+        if df["Close"].iloc[i] < df["Close"].iloc[i-4]:
+            buy_setup += 1
+        else:
+            buy_setup = 0
 
-    df["sell_cd_count"] = df["sell_cd"].groupby((df["sell_cd"] == False).cumsum()).cumcount() + 1
-    df["sell_cd_count"] = df["sell_cd_count"] * df["sell_cd"]
+        if df["Close"].iloc[i] > df["Close"].iloc[i-4]:
+            sell_setup += 1
+        else:
+            sell_setup = 0
 
-    latest = df.iloc[-1]
+        df.iloc[i, df.columns.get_loc("TD_Buy_Setup")] = buy_setup
+        df.iloc[i, df.columns.get_loc("TD_Sell_Setup")] = sell_setup
 
-    result = {
-        "new_today": None,
-        "active": None,
-        "early": None,
-        "score": 0
-    }
+        # Countdown starts only after setup 9
+        if buy_setup >= 9:
+            if df["Close"].iloc[i] <= df["Low"].iloc[i-2]:
+                buy_count += 1
+        else:
+            buy_count = 0
 
-    # NEW TODAY
-    if latest["buy_count"] == 9:
-        result["new_today"] = "TD9 BUY"
-        result["score"] += 2
+        if sell_setup >= 9:
+            if df["Close"].iloc[i] >= df["High"].iloc[i-2]:
+                sell_count += 1
+        else:
+            sell_count = 0
 
-    if latest["sell_count"] == 9:
-        result["new_today"] = "TD9 SELL"
-        result["score"] += 2
+        df.iloc[i, df.columns.get_loc("TD_Buy_Count")] = buy_count
+        df.iloc[i, df.columns.get_loc("TD_Sell_Count")] = sell_count
 
-    if latest["buy_cd_count"] == 13:
-        result["new_today"] = "TD13 BUY"
-        result["score"] += 4
+    return df
 
-    if latest["sell_cd_count"] == 13:
-        result["new_today"] = "TD13 SELL"
-        result["score"] += 4
-
-    # ACTIVE
-    if 9 < latest["buy_count"] <= 12:
-        result["active"] = "TD9 BUY"
-        result["score"] += 1
-
-    if 9 < latest["sell_count"] <= 12:
-        result["active"] = "TD9 SELL"
-        result["score"] += 1
-
-    if 13 < latest["buy_cd_count"] <= 20:
-        result["active"] = "TD13 BUY"
-        result["score"] += 2
-
-    if 13 < latest["sell_cd_count"] <= 20:
-        result["active"] = "TD13 SELL"
-        result["score"] += 2
-
-    # EARLY
-    if latest["buy_count"] in [7, 8]:
-        result["early"] = f"TD9 BUY ({int(latest['buy_count'])})"
-
-    if latest["sell_count"] in [7, 8]:
-        result["early"] = f"TD9 SELL ({int(latest['sell_count'])})"
-
-    if latest["buy_cd_count"] in [11, 12]:
-        result["early"] = f"TD13 BUY ({int(latest['buy_cd_count'])})"
-
-    if latest["sell_cd_count"] in [11, 12]:
-        result["early"] = f"TD13 SELL ({int(latest['sell_cd_count'])})"
-
-    return result
 
 # ===============================
-# MAIN ENGINE
+# SIGNAL CHECK
 # ===============================
+
+def get_signal(df):
+    last = df.iloc[-1]
+
+    if last["TD_Buy_Count"] == 13:
+        return "BUY_13"
+    if last["TD_Sell_Count"] == 13:
+        return "SELL_13"
+
+    if last["TD_Buy_Setup"] == 9:
+        return "BUY_9"
+    if last["TD_Sell_Setup"] == 9:
+        return "SELL_9"
+
+    return None
+
+
+# ===============================
+# DAILY TREND
+# ===============================
+
+def get_daily_trend(df):
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    last = df.iloc[-1]
+
+    if last["Close"] > last["EMA20"]:
+        return "UPTREND"
+    return "DOWNTREND"
+
+
+# ===============================
+# MAIN RUNNER
+# ===============================
+
 def run():
+
     universe = get_fno_universe()
 
-    new_today = []
-    active = []
-    early = []
+    for symbol, token in universe:
 
-    for _, row in universe.iterrows():
-        symbol = row["SYMBOL"]
-        token = row["TOKEN"]
+        print("Scanning:", symbol)
 
-        df = fetch_history("NFO", token,"60m")
-        if df is None or len(df) < 20:
+        df = fetch_minute_history("NFO", token)
+        if df is None or len(df) < 100:
             continue
 
-        result = calculate_td(df)
+        df_60m = td_sequential(resample_tf(df.copy(), "60min"))
+        df_2h = td_sequential(resample_tf(df.copy(), "120min"))
+        df_day = resample_tf(df.copy(), "1D")
 
-        if result["new_today"]:
-            new_today.append((symbol, result["new_today"], result["score"]))
+        signal = get_signal(df_60m)
 
-        elif result["active"]:
-            active.append((symbol, result["active"], result["score"]))
+        if not signal:
+            continue
 
-        elif result["early"]:
-            early.append((symbol, result["early"], result["score"]))
+        confirm_2h = get_signal(df_2h)
+        trend = get_daily_trend(df_day)
 
-    new_today.sort(key=lambda x: x[2], reverse=True)
-    active.sort(key=lambda x: x[2], reverse=True)
+        message = f"""
+🔥 TD SEQUENTIAL ALERT
 
-    message = f"TD SYSTEMS – DAILY SCAN ({datetime.today().strftime('%d %b %Y')})\n\n"
+Stock: {symbol}
+Primary (60m): {signal}
+2H Confirm: {confirm_2h if confirm_2h else "No"}
+Daily Trend: {trend}
+"""
 
-    message += "=== NEW TODAY ===\n"
-    for s in new_today[:10]:
-        message += f"{s[0]} → {s[1]} (Score {s[2]})\n"
+        print(message)
+        send_telegram(message)
 
-    message += "\n=== ACTIVE ===\n"
-    for s in active[:10]:
-        message += f"{s[0]} → {s[1]} (Score {s[2]})\n"
 
-    message += "\n=== EARLY ===\n"
-    for s in early[:10]:
-        message += f"{s[0]} → {s[1]}\n"
-
-    send_telegram(message)
+# ===============================
+# ENTRY POINT
+# ===============================
 
 if __name__ == "__main__":
+    print("Starting TD Sequential Scanner...")
     run()
