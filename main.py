@@ -108,15 +108,17 @@ def get_cash_universe():
 
 
 # ===============================
-# FETCH MINUTE HISTORY
+# FETCH  HISTORY
 # ===============================
 
-def fetch_minute_history(segment, token, compression=60):
+def fetch_history(segment, token, compression=60):
 
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    url = f"https://data.definedgesecurities.com/sds/minute/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+
+    print("HISTORY URL:", url)
 
     headers = {
         "Authorization": SESSION_KEY
@@ -128,7 +130,9 @@ def fetch_minute_history(segment, token, compression=60):
         print("History fetch failed:", response.status_code)
         return None
 
-    return pd.read_csv(io.StringIO(response.text))
+    df = pd.read_csv(io.StringIO(response.text))
+    return df
+
 
 
 # ===============================
@@ -246,7 +250,7 @@ def run():
 
         print("Scanning:", symbol)
 
-        df = fetch_minute_history("NFO", token)
+        df = fetch_history("NFO", token,"60")
         if df is None or len(df) < 100:
             continue
 
