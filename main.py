@@ -68,7 +68,10 @@ def fetch_minute_history(segment, token):
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    url = f"{BASE_HISTORY_URL}/{segment}/{token}/minute/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    # ✅ Correct minute URL format
+    url = f"{BASE_HISTORY_URL}/{segment}/{token}/minute/1/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+
+    print("HISTORY URL:", url)
 
     headers = {
         "Authorization": SESSION_KEY
@@ -77,11 +80,12 @@ def fetch_minute_history(segment, token):
     response = requests.get(url, headers=headers, timeout=20)
 
     if response.status_code != 200:
-        print("History fetch failed:", response.status_code)
+        print("History fetch failed:", response.status_code, response.text[:200])
         return None
 
     df = pd.read_csv(io.StringIO(response.text))
     return df
+
 
 
 # ===============================
