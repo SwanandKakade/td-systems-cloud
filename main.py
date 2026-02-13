@@ -113,8 +113,8 @@ def fetch_history(segment, token):
     end = datetime.now()
     start = end - timedelta(days=120)
 
-    from_date = start.strftime("%d%m%Y%H%M")
-    to_date = end.strftime("%d%m%Y%H%M")
+    from_date = start.strftime("%d%m%Y") + "0915"
+    to_date = end.strftime("%d%m%Y") + "1530"
 
     url = (
         f"https://data.definedgesecurities.com/sds/history/"
@@ -132,9 +132,13 @@ def fetch_history(segment, token):
 
     if response.status_code != 200:
         print("History fetch failed:", response.status_code)
+        print("Response text:", response.text[:300])
         return None
 
-    return pd.read_csv(io.StringIO(response.text))
+    df = pd.read_csv(io.StringIO(response.text))
+    print("Columns returned:", df.columns)
+
+    return df
 
 
 # ===============================
