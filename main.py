@@ -210,6 +210,8 @@ def run():
         return
 
     master_df = master_df[master_df["SEGMENT"] == "EQ"]
+    print(master_df["INSTRUMENTTYPE"].unique())
+    print(master_df["SEGMENT"].unique())
 
     print(f"Filtered NSE Cash universe: {len(master_df)}")
 
