@@ -268,18 +268,51 @@ def run():
         h240 = engine_240.run()
         last_240 = h240.iloc[-1]
 
-        # -----------------------------
-        # Multi-Timeframe Alignment
-        # -----------------------------
-        if last_daily["valid_buy_13"] and last_240["valid_buy_13"]:
-            signals.append(
-                f"💎 {symbol} STRONG BUY (Daily + 240m 13 Alignment)"
-            )
+     # ======================
+      # 4️⃣ Multi-Timeframe Alignment + Confidence
+    # ======================
+    
+    confidence = 0
+    direction = None
+    
+    # BUY alignment
+    if last_daily["valid_buy_13"]:
+        confidence += 2
+        direction = "BUY"
+    
+    if last_240["valid_buy_13"]:
+        confidence += 2
+        direction = "BUY"
+    
+    if last_daily["perfect_buy"]:
+        confidence += 1
+    
+    if last_240["perfect_buy"]:
+        confidence += 1
+    
+    # SELL alignment
+    if last_daily["valid_sell_13"]:
+        confidence += 2
+        direction = "SELL"
+    
+    if last_240["valid_sell_13"]:
+        confidence += 2
+        direction = "SELL"
+    
+    if last_daily["perfect_sell"]:
+        confidence += 1
+    
+    if last_240["perfect_sell"]:
+        confidence += 1
+    
+    
+    # Only alert strong institutional alignment
+    if confidence >= 3 and direction:
+    
+        signals.append(
+            f"💎 {symbol} STRONG {direction} | Confidence {confidence}/6"
+        )
 
-        if last_daily["valid_sell_13"] and last_240["valid_sell_13"]:
-            signals.append(
-                f"⚡ {symbol} STRONG SELL (Daily + 240m 13 Alignment)"
-            )
 
     # =====================================================
     # TELEGRAM SECTION
