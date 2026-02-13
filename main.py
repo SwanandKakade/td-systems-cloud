@@ -83,31 +83,29 @@ def get_fno_universe():
 
     df.columns = df.columns.str.strip().str.upper()
 
-    df["SEGMENT"] = df["SEGMENT"].astype(str).str.strip()
     df["INSTRUMENT TYPE"] = df["INSTRUMENT TYPE"].astype(str).str.strip()
-    df["TRADINGSYM"] = df["TRADINGSYM"].astype(str).str.strip()
 
-    # Print debug
-    print("SEGMENTS:", df["SEGMENT"].unique())
-    print("INSTRUMENT TYPES:", df["INSTRUMENT TYPE"].unique())
+    # Filter futures only
+    df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
 
-    # Filter futures (anything starting with FUT)
-    df = df[df["INSTRUMENT TYPE"].str.startswith("FUT")]
+    # Sort by expiry ascending (nearest expiry first)
+    df["EXPIRY"] = pd.to_datetime(df["EXPIRY"], format="%d%m%Y", errors="coerce")
+    df = df.sort_values(by=["SYMBOL", "EXPIRY"])
 
-    # Only NFO-like segments
-    df = df[df["SEGMENT"].str.contains("NFO", case=False)]
-
-    # Current month futures only
-    df = df[df["TRADINGSYM"].str.contains("-I")]
+    # Keep nearest expiry per SYMBOL (current month future)
+    df = df.drop_duplicates(subset=["SYMBOL"], keep="first")
 
     universe = []
 
     for _, row in df.iterrows():
-        universe.append((row["TRADINGSYM"], row["TOKEN"]))
+        tradingsym = row["TRADINGSYM"]
+        token = row["TOKEN"]
+        universe.append((tradingsym, token))
 
     print("Filtered F&O universe:", len(universe))
 
     return universe
+
 
 
 # ===============================
