@@ -73,4 +73,13 @@ class DeMarkEngine:
         self.compute_setups()
         self.compute_countdown()
         self.validate_td13()
+
+        # 🔥 Standardized column naming (IMPORTANT)
+        self.df["bull_setup"] = self.df["buy_setup"]
+        self.df["bear_setup"] = self.df["sell_setup"]
+        self.df["bull_countdown"] = self.df["buy_cd"]
+        self.df["bear_countdown"] = self.df["sell_cd"]
+        self.df["valid_buy_13"] = self.df["valid_buy"]
+        self.df["valid_sell_13"] = self.df["valid_sell"]
+
         return self.df
