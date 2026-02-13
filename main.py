@@ -64,12 +64,11 @@ def get_fno_universe():
 # FETCH MINUTE HISTORY
 # ===============================
 
-def fetch_minute_history(segment, token):
+def fetch_minute_history(segment, token, compression=60):
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    # ✅ Correct minute URL format
-    url = f"{BASE_HISTORY_URL}/{segment}/{token}/minute/1/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    url = f"https://data.definedgesecurities.com/sds/minute/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
     print("HISTORY URL:", url)
 
@@ -80,11 +79,12 @@ def fetch_minute_history(segment, token):
     response = requests.get(url, headers=headers, timeout=20)
 
     if response.status_code != 200:
-        print("History fetch failed:", response.status_code, response.text[:200])
+        print("History fetch failed:", response.status_code)
         return None
 
     df = pd.read_csv(io.StringIO(response.text))
     return df
+
 
 
 
