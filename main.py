@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 # ===============================
 # CONFIG (Environment Variables)
 # ===============================
-DEFINEDGE_API_KEY = os.getenv("DEFINEDGE_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -24,19 +23,27 @@ def send_telegram(message):
 # Fetch Historical Data
 # ===============================
 def fetch_history(segment, token):
+    session_key = os.getenv("DEFINEDGE_SESSION_KEY")
+
     end = datetime.today()
     start = end - timedelta(days=120)
 
     url = f"{BASE_URL}/sds/history/{segment}/{token}/day/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
-    headers = {"Authorization": f"Bearer {DEFINEDGE_API_KEY}"}
 
-    response = requests.get(url, headers=headers)
+    headers = {
+        "Authorization": f"Bearer {session_key}"
+    }
+
+    response = requests.get(url, headers=headers, timeout=15)
 
     if response.status_code != 200:
+        print("History fetch failed:", response.text)
         return None
 
-    df = pd.read_csv(pd.compat.StringIO(response.text))
+    from io import StringIO
+    df = pd.read_csv(StringIO(response.text))
     return df
+
 
 # ===============================
 # TD Logic
