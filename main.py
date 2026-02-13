@@ -35,29 +35,34 @@ def send_telegram(message):
 # ===============================
 # MASTER FILE (F&O ONLY)
 # ===============================
-
 def get_fno_universe():
-    print("Downloading master file...")
 
-    response = requests.get(MASTER_URL)
-    z = zipfile.ZipFile(io.BytesIO(response.content))
-    filename = z.namelist()[0]
+    df = load_master_file()   # your master loader
 
-    df = pd.read_csv(z.open(filename), header=None)
-
+    # Clean column names
     df.columns = [
-        "SEGMENT", "TOKEN", "SYMBOL", "TRADINGSYM",
-        "INSTRUMENT_TYPE", "EXPIRY", "TICKSIZE",
-        "LOTSIZE", "OPTIONTYPE", "STRIKE",
-        "PRICEPREC", "MULTIPLIER",
-        "ISIN", "PRICEMULT", "COMPANY"
+        "SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT",
+        "EXPIRY","TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE",
+        "PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"
     ]
 
-    df = df[df["INSTRUMENT_TYPE"].isin(["FUTSTK", "FUTIDX"])]
+    # Only NFO
+    df = df[df["SEGMENT"] == "NFO"]
 
-    print("Total F&O contracts:", len(df))
+    # Only Futures (skip options completely)
+    df = df[df["INSTRUMENT"].isin(["FUTSTK", "FUTIDX"])]
 
-    return df[["SYMBOL", "TOKEN"]].drop_duplicates().values.tolist()
+    # Convert expiry to datetime
+    df["EXPIRY"] = pd.to_datetime(df["EXPIRY"], format="%d%m%Y", errors="coerce")
+
+    # Keep only nearest expiry per symbol
+    df = df.sort_values("EXPIRY")
+    df = df.groupby("SYMBOL").first().reset_index()
+
+    print("Filtered F&O universe:", len(df))
+
+    return df
+
 
 
 # ===============================
