@@ -193,7 +193,7 @@ def run():
         symbol = row["SYMBOL"]
         token = row["TOKEN"]
 
-        df = fetch_daily(token)
+        df = fetch_history("NFO", token,"60m")
         if df is None or len(df) < 20:
             continue
 
