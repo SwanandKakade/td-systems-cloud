@@ -1,267 +1,200 @@
 import os
-import io
-import sys
-import time
-import zipfile
 import requests
 import pandas as pd
+import zipfile
+import io
+import logging
 from datetime import datetime, timedelta
-from tqdm import tqdm
 
-# ==============================
-# ENV VARIABLES (Railway Safe)
-# ==============================
+# Safe tqdm import (Railway safe)
+try:
+    from tqdm import tqdm
+except:
+    def tqdm(x, **kwargs):
+        return x
 
-SESSION_KEY = os.getenv("DEFINEDGE_SESSION_KEY")
+# ---------------- CONFIG ---------------- #
+
+DEFINEDGE_SESSION = os.getenv("DEFINEDGE_SESSION_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-if not SESSION_KEY:
-    print("❌ DEFINEDGE_SESSION_KEY missing")
-    sys.exit(1)
+MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 
-HEADERS = {
-    "Authorization": f"Bearer {SESSION_KEY}"
-}
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-# ==============================
-# TELEGRAM
-# ==============================
+# ---------------- TELEGRAM ---------------- #
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("⚠ Telegram not configured")
         return
-
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        requests.post(url, data=payload, timeout=10)
-    except Exception as e:
-        print("Telegram Error:", e)
+        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+    except:
+        pass
 
-
-# ==============================
-# LOAD MASTER FILE
-# ==============================
+# ---------------- MASTER FILE ---------------- #
 
 def load_master_file():
-    print("Downloading NSE Cash master file...")
+    try:
+        response = requests.get(MASTER_URL)
+        if response.status_code != 200:
+            logging.info(f"Master HTTP error: {response.status_code}")
+            return None
 
-    url = "https://app.definedgesecurities.com/public/nsecash.zip"
+        z = zipfile.ZipFile(io.BytesIO(response.content))
+        csv_file = z.namelist()[0]
+        df = pd.read_csv(z.open(csv_file))
 
-    response = requests.get(url, timeout=30)
-    if response.status_code != 200:
-        print("Master file HTTP error:", response.status_code)
+        # Assign correct columns
+        df.columns = [
+            "EXCHANGE","TOKEN","SYMBOL","TRADINGSYM",
+            "INSTRUMENTTYPE","EXPIRY","TICKSIZE","LOTSIZE",
+            "OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
+            "ISIN","PRICEMULT","COMPANY"
+        ]
+
+        df = df[df["INSTRUMENTTYPE"] == "EQ"]
+        return df
+
+    except Exception as e:
+        logging.info(f"Master load failed: {e}")
         return None
 
-    print("ZIP size:", len(response.content))
+# ---------------- HISTORY ---------------- #
 
-    z = zipfile.ZipFile(io.BytesIO(response.content))
-    file_name = z.namelist()[0]
-    print("Files inside ZIP:", z.namelist())
-
-    df = pd.read_csv(z.open(file_name), header=None)
-
-    # Assign ALL 15 correct columns
-    df.columns = [
-        "EXCHANGE",
-        "TOKEN",
-        "SYMBOL",
-        "TRADINGSYM",
-        "INSTRUMENTTYPE",
-        "EXPIRY",
-        "TICKSIZE",
-        "LOTSIZE",
-        "OPTIONTYPE",
-        "STRIKE",
-        "PRICEPREC",
-        "MULTIPLIER",
-        "ISIN",
-        "PRICEMULT",
-        "COMPANY"
-    ]
-
-    print("Columns assigned successfully")
-    print("Total rows:", len(df))
-
-    return df
-
-
-# ==============================
-# FETCH HISTORY
-# ==============================
-
-def fetch_history(segment, token, timeframe="day"):
-
+def fetch_daily(token):
     try:
-        today = datetime.now()
-        from_date = (today - timedelta(days=120)).strftime("%d%m%Y%H%M")
-        to_date = today.strftime("%d%m%Y%H%M")
+        end = datetime.now()
+        start = end - timedelta(days=120)
 
-        if timeframe == "day":
-            url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/{from_date}/{to_date}"
-        else:
-            url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/minute/{from_date}/{to_date}"
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/day/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
 
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        headers = {"Authorization": DEFINEDGE_SESSION}
 
-        if response.status_code != 200:
+        r = requests.get(url, headers=headers)
+        if r.status_code != 200:
             return None
 
-        if not response.text.strip():
-            return None
-
-        df = pd.read_csv(io.StringIO(response.text), header=None)
+        df = pd.read_csv(io.StringIO(r.text))
 
         if df.empty:
             return None
 
-        df.columns = ["DATETIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
-
-        df["DATETIME"] = pd.to_datetime(df["DATETIME"], format="%d%m%Y%H%M", errors="coerce")
-        df.dropna(inplace=True)
-
+        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
+        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+        df = df.sort_values("DATETIME")
         return df
 
     except:
         return None
 
+# ---------------- TD LOGIC ---------------- #
 
-# ==============================
-# TD SEQUENTIAL (SETUP + COUNTDOWN)
-# ==============================
+def td_setup(df):
 
-def td_sequential(df):
-
-    df = df.copy()
-    df["Setup"] = 0
-    df["Countdown"] = 0
-    df["Direction"] = None
-
-    setup_count = 0
-    countdown = 0
-    direction = None
+    df["bull_setup"] = 0
+    df["bear_setup"] = 0
 
     for i in range(4, len(df)):
-
-        if df["CLOSE"].iloc[i] > df["CLOSE"].iloc[i - 4]:
-            if direction != "bearish":
-                setup_count = 0
-            direction = "bearish"
-            setup_count += 1
-
-        elif df["CLOSE"].iloc[i] < df["CLOSE"].iloc[i - 4]:
-            if direction != "bullish":
-                setup_count = 0
-            direction = "bullish"
-            setup_count += 1
+        if df["CLOSE"].iloc[i] < df["CLOSE"].iloc[i-4]:
+            df.loc[df.index[i], "bull_setup"] = df["bull_setup"].iloc[i-1] + 1
         else:
-            setup_count = 0
+            df.loc[df.index[i], "bull_setup"] = 0
 
-        df.loc[df.index[i], "Setup"] = setup_count
-        df.loc[df.index[i], "Direction"] = direction
-
-        # Countdown logic after setup 9
-        if setup_count == 9:
-            countdown = 1
-        elif countdown > 0:
-            countdown += 1
-
-        df.loc[df.index[i], "Countdown"] = countdown
+        if df["CLOSE"].iloc[i] > df["CLOSE"].iloc[i-4]:
+            df.loc[df.index[i], "bear_setup"] = df["bear_setup"].iloc[i-1] + 1
+        else:
+            df.loc[df.index[i], "bear_setup"] = 0
 
     return df
 
+def td_countdown(df):
 
-# ==============================
-# MAIN SCANNER
-# ==============================
+    df["bull_countdown"] = 0
+    df["bear_countdown"] = 0
+
+    bull_cd = 0
+    bear_cd = 0
+
+    for i in range(2, len(df)):
+
+        if df["bull_setup"].iloc[i] >= 9:
+            bull_cd = 0
+
+        if df["bear_setup"].iloc[i] >= 9:
+            bear_cd = 0
+
+        # Bullish countdown
+        if df["CLOSE"].iloc[i] <= df["LOW"].iloc[i-2]:
+            bull_cd += 1
+            df.loc[df.index[i], "bull_countdown"] = bull_cd
+
+        # Bearish countdown
+        if df["CLOSE"].iloc[i] >= df["HIGH"].iloc[i-2]:
+            bear_cd += 1
+            df.loc[df.index[i], "bear_countdown"] = bear_cd
+
+    return df
+
+# ---------------- RUN ---------------- #
 
 def run():
 
-    print("Starting TD Sequential Scanner...")
+    logging.info("Starting TD Sequential Scanner...")
 
-    master_df = load_master_file()
-    if master_df is None:
-        print("Master unavailable. Exiting.")
+    master = load_master_file()
+    if master is None:
+        logging.info("Master unavailable.")
         return
 
-    master_df = master_df[master_df["INSTRUMENTTYPE"] == "EQ"]
-    print(master_df["INSTRUMENTTYPE"].unique())
+    signals = []
 
-    print("Columns:", master_df.columns.tolist())
-    print(master_df.head(3))
+    for _, row in tqdm(master.iterrows(), total=len(master)):
 
-    print(f"Filtered NSE Cash universe: {len(master_df)}")
-
-    signals_found = 0
-
-    for _, row in tqdm(master_df.iterrows(), total=len(master_df)):
-
-        symbol = row["SYMBOL"]
         token = row["TOKEN"]
+        symbol = row["SYMBOL"]
 
-        daily_df = fetch_history("NSE", token, "day")
-        if daily_df is None:
+        df = fetch_daily(token)
+        if df is None or len(df) < 20:
             continue
 
         # Volume filter
-        if daily_df["VOLUME"].tail(5).mean() < 100000:
+        if df["VOLUME"].tail(20).mean() < 100000:
             continue
 
-        daily_df = td_sequential(daily_df)
+        df = td_setup(df)
+        df = td_countdown(df)
 
-        last = daily_df.iloc[-1]
-        setup = last["Setup"]
-        countdown = last["Countdown"]
-        direction = last["Direction"]
+        last = df.iloc[-1]
 
-        signal_type = None
+        # Setup density boost
+        if last["bull_setup"] in [6,7,8,9]:
+            signals.append(f"🟢 {symbol} Bull Setup {int(last['bull_setup'])}")
 
-        if setup in [7, 8]:
-            signal_type = "EARLY"
-        elif setup == 9:
-            signal_type = "ACTIVE"
-        elif countdown >= 13:
-            signal_type = "COUNTDOWN 13"
+        if last["bear_setup"] in [6,7,8,9]:
+            signals.append(f"🔴 {symbol} Bear Setup {int(last['bear_setup'])}")
 
-        if signal_type:
+        # Countdown alerts
+        if last["bull_countdown"] in [10,11,12]:
+            signals.append(f"🟢 {symbol} Bull Countdown {int(last['bull_countdown'])}")
 
-            bias = "SELL" if direction == "bearish" else "BUY"
+        if last["bull_countdown"] == 13:
+            signals.append(f"🚀 {symbol} Bullish 13 Exhaustion")
 
-            message = (
-                f"<b>📊 TD SIGNAL</b>\n\n"
-                f"<b>Stock:</b> {symbol}\n"
-                f"<b>Signal:</b> {signal_type}\n"
-                f"<b>Bias:</b> {bias}\n"
-                f"<b>Setup:</b> {setup}\n"
-                f"<b>Countdown:</b> {countdown}\n"
-                f"<b>Timeframe:</b> DAILY"
-            )
+        if last["bear_countdown"] in [10,11,12]:
+            signals.append(f"🔴 {symbol} Bear Countdown {int(last['bear_countdown'])}")
 
-            # Minute confirmation for strong signals
-            if signal_type in ["ACTIVE", "COUNTDOWN 13"]:
+        if last["bear_countdown"] == 13:
+            signals.append(f"🔥 {symbol} Bearish 13 Exhaustion")
 
-                minute_df = fetch_history("NSE", token, "minute")
+    logging.info(f"Scan Completed. Signals Found: {len(signals)}")
 
-                if minute_df is not None:
-                    minute_df = td_sequential(minute_df)
-                    min_setup = minute_df.iloc[-1]["Setup"]
+    if signals:
+        message = "📊 TD Signals:\n\n" + "\n".join(signals[:40])
+        send_telegram(message)
 
-                    if min_setup >= 7:
-                        message += "\n\n🔥 60min Alignment Confirmed"
-
-            send_telegram(message)
-            signals_found += 1
-
-    print(f"Scan Completed. Signals Found: {signals_found}")
-
-
-# ==============================
 
 if __name__ == "__main__":
     run()
