@@ -93,6 +93,35 @@ def fetch_daily(token):
     except:
         return None
 
+
+def fetch_240m(token):
+    try:
+        end = datetime.now()
+        start = end - timedelta(days=60)   # 240m needs less history
+
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/240/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
+
+        headers = {"Authorization": DEFINEDGE_SESSION}
+
+        r = requests.get(url, headers=headers)
+        if r.status_code != 200:
+            return None
+
+        df = pd.read_csv(io.StringIO(r.text))
+
+        if df.empty:
+            return None
+
+        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
+        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+        df = df.sort_values("DATETIME")
+
+        return df
+
+    except:
+        return None
+
+
 # ---------------- TD LOGIC ---------------- #
 
 def td_setup(df):
