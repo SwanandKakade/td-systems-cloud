@@ -78,6 +78,17 @@ def load_master_file():
 
     df = pd.read_csv(z.open(file_name), header=None)
 
+    df.columns = [
+    "TOKEN",
+    "SYMBOL",
+    "SERIES",
+    "TICKSIZE",
+    "LOTSIZE",
+    "ISIN",
+    "COMPANY"
+    ]
+
+
     print("Raw rows inside CSV:", len(df))
 
     return df
@@ -183,9 +194,8 @@ def run():
         print("Master unavailable. Exiting.")
         return
 
-    master_df = master_df[master_df["SEGMENT"] == "EQ"]
-    print(master_df["INSTRUMENTTYPE"].unique())
-    print(master_df["SEGMENT"].unique())
+    master_df = master_df[master_df["SERIES"] == "EQ"]
+    print(master_df["SERIES"].unique())
 
     print("Columns:", master_df.columns.tolist())
     print(master_df.head(3))
