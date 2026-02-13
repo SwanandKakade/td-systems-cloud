@@ -29,12 +29,37 @@ def send_telegram(message):
 # ===============================
 def get_fno_universe():
     response = requests.get(MASTER_FNO_URL)
+
     z = zipfile.ZipFile(io.BytesIO(response.content))
     filename = z.namelist()[0]
-    df = pd.read_csv(z.open(filename))
 
-    print("MASTER COLUMNS:", df.columns.tolist())
-    return df.head(5)
+    # Master file has NO header row
+    df = pd.read_csv(z.open(filename), header=None)
+
+    # Assign correct column names manually
+    df.columns = [
+        "SEGMENT",
+        "TOKEN",
+        "SYMBOL",
+        "TRADINGSYM",
+        "INSTRUMENTTYPE",
+        "EXPIRY",
+        "TICKSIZE",
+        "LOTSIZE",
+        "OPTIONTYPE",
+        "STRIKE",
+        "PRICEPREC",
+        "MULTIPLIER",
+        "ISIN",
+        "PRICEMULT",
+        "COMPANY"
+    ]
+
+    # Keep only F&O futures (ignore options for now)
+    df = df[df["INSTRUMENTTYPE"].isin(["FUTSTK", "FUTIDX"])]
+
+    return df[["SYMBOL", "TOKEN"]]
+
 
 
 def fetch_daily(token):
