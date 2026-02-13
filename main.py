@@ -108,15 +108,18 @@ def get_cash_universe():
 # FETCH  HISTORY
 # ===============================
 
-def fetch_history(segment, token, compression=60):
+def fetch_history(segment, token):
 
-    end = datetime.today()
+    end = datetime.now()
     start = end - timedelta(days=120)
+
+    from_date = start.strftime("%d%m%Y%H%M")
+    to_date = end.strftime("%d%m%Y%H%M")
 
     url = (
         f"https://data.definedgesecurities.com/sds/history/"
-        f"{segment}/{token}/minute/{compression}/"
-        f"{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+        f"{segment}/{token}/minute/"
+        f"{from_date}/{to_date}"
     )
 
     print("HISTORY URL:", url)
@@ -132,6 +135,7 @@ def fetch_history(segment, token, compression=60):
         return None
 
     return pd.read_csv(io.StringIO(response.text))
+
 
 # ===============================
 # RESAMPLE FUNCTION
@@ -150,7 +154,6 @@ def resample_tf(df, rule):
     }).dropna()
 
     return df_tf
-
 
 # ===============================
 # TD SETUP + COUNTDOWN
