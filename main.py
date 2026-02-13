@@ -159,56 +159,73 @@ def run():
         token = row["TOKEN"]
         symbol = row["SYMBOL"]
 
-        # ======================
+        # =====================================================
         # 1️⃣ DAILY TIMEFRAME
-        # ======================
+        # =====================================================
 
         df_daily = fetch_daily(token)
         if df_daily is None or len(df_daily) < 50:
             continue
 
-        # Volume filter
-        if df_daily["VOLUME"].tail(20).mean() < 100000:
+        # Normalize column names (VERY IMPORTANT)
+        df_daily.columns = [c.lower() for c in df_daily.columns]
+
+        # Liquidity filter
+        if df_daily["volume"].tail(20).mean() < 100000:
             continue
 
         engine_daily = DeMarkEngine(df_daily)
         daily = engine_daily.run()
         last_daily = daily.iloc[-1]
 
-        # Density boost (early signals)
-        if last_daily["bull_setup"] in [6, 7, 8, 9]:
-            signals.append(f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}")
+        # -----------------------------
+        # Early Setup Signals (7–9)
+        # -----------------------------
+        if last_daily["bull_setup"] in [7, 8, 9]:
+            signals.append(
+                f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}"
+            )
 
-        if last_daily["bear_setup"] in [6, 7, 8, 9]:
-            signals.append(f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}")
+        if last_daily["bear_setup"] in [7, 8, 9]:
+            signals.append(
+                f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}"
+            )
 
-        # Countdown progress
-        if last_daily["bull_countdown"] in [10, 11, 12]:
-            signals.append(f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}")
+        # -----------------------------
+        # Countdown Progress (11–12)
+        # -----------------------------
+        if last_daily["bull_countdown"] in [11, 12]:
+            signals.append(
+                f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}"
+            )
 
-        if last_daily["bear_countdown"] in [10, 11, 12]:
-            signals.append(f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}")
+        if last_daily["bear_countdown"] in [11, 12]:
+            signals.append(
+                f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}"
+            )
 
-        # ======================
-        # 2️⃣ DAILY 13 EXHAUSTION
-        # ======================
-
+        # -----------------------------
+        # Valid 13 Exhaustion
+        # -----------------------------
         if last_daily["valid_buy_13"]:
-            signals.append(f"🚀 {symbol} DAILY 13 BUY Exhaustion")
+            signals.append(
+                f"🚀 {symbol} DAILY 13 BUY Exhaustion"
+            )
 
         if last_daily["valid_sell_13"]:
-            signals.append(f"🔥 {symbol} DAILY 13 SELL Exhaustion")
+            signals.append(
+                f"🔥 {symbol} DAILY 13 SELL Exhaustion"
+            )
 
-        # ======================
-        # 3️⃣ 240m CONFIRMATION
-        # Only check 240m if Daily near exhaustion
-        # ======================
+        # =====================================================
+        # 2️⃣ 240m CONFIRMATION (Only if near exhaustion)
+        # =====================================================
 
         if not (
             last_daily["valid_buy_13"] or
             last_daily["valid_sell_13"] or
-            last_daily["bull_countdown"] >= 10 or
-            last_daily["bear_countdown"] >= 10
+            last_daily["bull_countdown"] >= 11 or
+            last_daily["bear_countdown"] >= 11
         ):
             continue
 
@@ -216,31 +233,39 @@ def run():
         if df_240 is None or len(df_240) < 50:
             continue
 
+        df_240.columns = [c.lower() for c in df_240.columns]
+
         engine_240 = DeMarkEngine(df_240)
         h240 = engine_240.run()
         last_240 = h240.iloc[-1]
 
-        # ======================
-        # 4️⃣ Multi-Timeframe Strength
-        # ======================
-
+        # -----------------------------
+        # Multi-Timeframe Alignment
+        # -----------------------------
         if last_daily["valid_buy_13"] and last_240["valid_buy_13"]:
-            signals.append(f"💎 {symbol} STRONG BUY (Daily + 240m 13 Alignment)")
+            signals.append(
+                f"💎 {symbol} STRONG BUY (Daily + 240m 13 Alignment)"
+            )
 
         if last_daily["valid_sell_13"] and last_240["valid_sell_13"]:
-            signals.append(f"⚡ {symbol} STRONG SELL (Daily + 240m 13 Alignment)")
+            signals.append(
+                f"⚡ {symbol} STRONG SELL (Daily + 240m 13 Alignment)"
+            )
 
-    # ======================
+    # =====================================================
     # TELEGRAM SECTION
-    # ======================
+    # =====================================================
 
     logging.info(f"Scan Completed. Signals Found: {len(signals)}")
 
     if signals:
-        message = "📊 TD Institutional Signals:\n\n" + "\n".join(signals[:40])
+        message = "📊 TD Institutional Signals:\n\n"
+        message += "\n".join(signals[:40])
 
         logging.info("Sending Telegram Alert...")
         send_telegram(message)
+    else:
+        logging.info("No signals generated today.")
 
 if __name__ == "__main__":
     run()
