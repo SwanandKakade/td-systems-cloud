@@ -57,31 +57,28 @@ def load_master_file():
 # ===============================
 def get_fno_universe():
 
-    df = load_master_file()   # your master loader
+    df = load_master_file()
 
-    # Clean column names
-    df.columns = [
-        "SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT",
-        "EXPIRY","TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE",
-        "PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"
-    ]
+    # Make sure correct column names
+    df.columns = [col.strip().upper() for col in df.columns]
 
-    # Only NFO
-    df = df[df["SEGMENT"] == "NFO"]
+    # Filter Futures only
+    df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
 
-    # Only Futures (skip options completely)
-    df = df[df["INSTRUMENT"].isin(["FUTSTK", "FUTIDX"])]
+    # Keep only first occurrence per symbol
+    df = df.drop_duplicates(subset=["SYMBOL"])
 
-    # Convert expiry to datetime
-    df["EXPIRY"] = pd.to_datetime(df["EXPIRY"], format="%d%m%Y", errors="coerce")
+    universe = []
 
-    # Keep only nearest expiry per symbol
-    df = df.sort_values("EXPIRY")
-    df = df.groupby("SYMBOL").first().reset_index()
+    for _, row in df.iterrows():
+        symbol = row["SYMBOL"]
+        token = row["TOKEN"]
+        universe.append((symbol, token))
 
-    print("Filtered F&O universe:", len(df))
+    print("Filtered F&O universe:", len(universe))
 
-    return df
+    return universe
+
 
 
 
