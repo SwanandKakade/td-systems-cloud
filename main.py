@@ -8,7 +8,7 @@ import io
 # ===============================
 # CONFIG
 # ===============================
-
+ 
 MASTER_URL = "https://app.definedgesecurities.com/public/nsefno.zip"
 BASE_HISTORY_URL = "https://data.definedgesecurities.com/sds/history"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
