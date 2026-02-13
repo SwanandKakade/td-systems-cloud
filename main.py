@@ -34,23 +34,20 @@ def send_telegram(message):
 
 def load_master_file():
 
-    print("Downloading NFO master file...")
+    print("Downloading NSE Cash master file...")
 
     import zipfile
     from io import BytesIO
 
-    url = "https://app.definedgesecurities.com/public/nsefno.zip"
+    url = "https://app.definedgesecurities.com/public/nsecash.zip"
 
     response = requests.get(url)
     z = zipfile.ZipFile(BytesIO(response.content))
 
-    # Get first file inside zip
     file_name = z.namelist()[0]
 
-    # IMPORTANT: header=None
     df = pd.read_csv(z.open(file_name), header=None)
 
-    # Manually assign column names
     df.columns = [
         "SEGMENT",
         "TOKEN",
@@ -73,38 +70,40 @@ def load_master_file():
 
     return df
 
-
 # ===============================
-# MASTER FILE (F&O ONLY)
+# MASTER FILE
 # ===============================
-def get_fno_universe():
+def get_cash_universe():
 
-    df = load_master_file()
+    print("Downloading NSE Cash master file...")
 
-    df.columns = df.columns.str.strip().str.upper()
+    df = load_master_file()   # your existing loader
 
-    df["INSTRUMENT TYPE"] = df["INSTRUMENT TYPE"].astype(str).str.strip()
+    df.columns = [col.strip().upper() for col in df.columns]
 
-    # Filter futures only
-    df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
+    # Filter NSE Cash equities
+    df = df[
+        (df["SEGMENT"] == "NSE") &
+        (df["INSTRUMENT TYPE"] == "EQ")
+    ]
 
-    # Sort by expiry ascending (nearest expiry first)
-    df["EXPIRY"] = pd.to_datetime(df["EXPIRY"], format="%d%m%Y", errors="coerce")
-    df = df.sort_values(by=["SYMBOL", "EXPIRY"])
+    # Remove ETFs and unwanted instruments
+    df = df[~df["SYMBOL"].str.contains("ETF|BEES|LIQUID|GOLD", na=False)]
 
-    # Keep nearest expiry per SYMBOL (current month future)
-    df = df.drop_duplicates(subset=["SYMBOL"], keep="first")
+    # Drop duplicates
+    df = df.drop_duplicates(subset=["SYMBOL"])
 
     universe = []
 
     for _, row in df.iterrows():
-        tradingsym = row["TRADINGSYM"]
+        symbol = row["SYMBOL"]
         token = row["TOKEN"]
-        universe.append((tradingsym, token))
+        universe.append((symbol, token))
 
-    print("Filtered F&O universe:", len(universe))
+    print("Filtered NSE Cash universe:", len(universe))
 
     return universe
+
 
 
 
