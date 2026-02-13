@@ -132,12 +132,18 @@ def fetch_history(segment, token):
 
     if response.status_code != 200:
         print("History fetch failed:", response.status_code)
-        print("Response text:", response.text[:300])
         return None
 
-    df = pd.read_csv(io.StringIO(response.text))
-    print("Columns returned:", df.columns)
+    df = pd.read_csv(io.StringIO(response.text), header=None)
 
+    df.columns = [
+        "DATETIME",
+        "OPEN",
+        "HIGH",
+        "LOW",
+        "CLOSE",
+        "VOLUME"
+    ]
     return df
 
 
