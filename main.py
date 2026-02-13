@@ -65,12 +65,32 @@ def load_master_file():
     file_name = z.namelist()[0]
     print("Files inside ZIP:", z.namelist())
 
-    df = pd.read_csv(z.open(file_name))
+    df = pd.read_csv(z.open(file_name), header=None)
 
-    print("Columns:", df.columns.tolist())
+    # Assign ALL 15 correct columns
+    df.columns = [
+        "EXCHANGE",
+        "TOKEN",
+        "SYMBOL",
+        "TRADINGSYM",
+        "INSTRUMENTTYPE",
+        "EXPIRY",
+        "TICKSIZE",
+        "LOTSIZE",
+        "OPTIONTYPE",
+        "STRIKE",
+        "PRICEPREC",
+        "MULTIPLIER",
+        "ISIN",
+        "PRICEMULT",
+        "COMPANY"
+    ]
+
+    print("Columns assigned successfully")
     print("Total rows:", len(df))
 
     return df
+
 
 # ==============================
 # FETCH HISTORY
@@ -170,8 +190,8 @@ def run():
         print("Master unavailable. Exiting.")
         return
 
-    master_df = master_df[master_df["SERIES"] == "EQ"]
-    print(master_df["SERIES"].unique())
+    master_df = master_df[master_df["INSTRUMENTTYPE"] == "EQ"]
+    print(master_df["INSTRUMENTTYPE"].unique())
 
     print("Columns:", master_df.columns.tolist())
     print(master_df.head(3))
