@@ -36,21 +36,43 @@ def load_master_file():
 
     print("Downloading NFO master file...")
 
+    import zipfile
+    from io import BytesIO
+
     url = "https://app.definedgesecurities.com/public/nsefno.zip"
 
-    response = requests.get(url, timeout=30)
+    response = requests.get(url)
+    z = zipfile.ZipFile(BytesIO(response.content))
 
-    if response.status_code != 200:
-        raise Exception("Failed to download master file")
+    # Get first file inside zip
+    file_name = z.namelist()[0]
 
-    z = zipfile.ZipFile(io.BytesIO(response.content))
-    filename = z.namelist()[0]
+    # IMPORTANT: header=None
+    df = pd.read_csv(z.open(file_name), header=None)
 
-    df = pd.read_csv(z.open(filename))
+    # Manually assign column names
+    df.columns = [
+        "SEGMENT",
+        "TOKEN",
+        "SYMBOL",
+        "TRADINGSYM",
+        "INSTRUMENT TYPE",
+        "EXPIRY",
+        "TICKSIZE",
+        "LOTSIZE",
+        "OPTIONTYPE",
+        "STRIKE",
+        "PRICEPREC",
+        "MULTIPLIER",
+        "ISIN",
+        "PRICEMULT",
+        "COMPANY"
+    ]
 
     print("Master file loaded. Rows:", len(df))
 
     return df
+
 
 # ===============================
 # MASTER FILE (F&O ONLY)
