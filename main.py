@@ -32,6 +32,26 @@ def send_telegram(message):
     requests.post(url, data=payload)
 
 
+def load_master_file():
+
+    print("Downloading NFO master file...")
+
+    url = "https://app.definedgesecurities.com/public/nsefno.zip"
+
+    response = requests.get(url, timeout=30)
+
+    if response.status_code != 200:
+        raise Exception("Failed to download master file")
+
+    z = zipfile.ZipFile(io.BytesIO(response.content))
+    filename = z.namelist()[0]
+
+    df = pd.read_csv(z.open(filename))
+
+    print("Master file loaded. Rows:", len(df))
+
+    return df
+
 # ===============================
 # MASTER FILE (F&O ONLY)
 # ===============================
