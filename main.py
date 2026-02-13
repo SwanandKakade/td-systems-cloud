@@ -77,9 +77,10 @@ def fetch_history(segment, token, interval="120m"):
     )
 
     headers = {
-    "Authorization": session_key
+    "authorization": session_key
             }
-
+    print("SESSION KEY RAW:", session_key)
+    print("HEADERS:", {"Authorization": session_key})
 
     print("HISTORY URL:", url)
 
