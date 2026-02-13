@@ -50,64 +50,38 @@ def send_telegram(message):
 # ==============================
 
 def load_master_file():
-
     print("Downloading NSE Cash master file...")
-
-    import requests
-    import zipfile
-    import io
-    import os
-
-    session_key = os.getenv("DEFINEDGE_SESSION_KEY")
-
-    if not session_key:
-        print("DEFINEDGE_SESSION_KEY missing.")
-        return None
 
     url = "https://app.definedgesecurities.com/public/nsecash.zip"
 
     headers = {
-        "Authorization": session_key,
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0"
     }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
+    response = requests.get(url, headers=headers, timeout=15)
 
-        if response.status_code != 200:
-            print(f"Master file HTTP error: {response.status_code}")
-            return None
-
-        z = zipfile.ZipFile(io.BytesIO(response.content))
-        file_name = z.namelist()[0]
-
-        df = pd.read_csv(z.open(file_name), header=None)
-
-        df.columns = [
-            "SEGMENT",
-            "TOKEN",
-            "SYMBOL",
-            "TRADINGSYM",
-            "INSTRUMENTTYPE",
-            "EXPIRY",
-            "TICKSIZE",
-            "LOTSIZE",
-            "OPTIONTYPE",
-            "STRIKE",
-            "PRICEPREC",
-            "MULTIPLIER",
-            "ISIN",
-            "PRICEMULT",
-            "COMPANY"
-        ]
-
-        print("Master file loaded. Rows:", len(df))
-        return df
-
-    except Exception as e:
-        print("Master file load failed:", e)
+    if response.status_code != 200:
+        print("Master file HTTP error:", response.status_code)
         return None
+
+    print("ZIP size:", len(response.content))
+
+    try:
+        z = zipfile.ZipFile(io.BytesIO(response.content))
+    except Exception as e:
+        print("ZIP error:", e)
+        return None
+
+    print("Files inside ZIP:", z.namelist())
+
+    file_name = z.namelist()[0]
+
+    df = pd.read_csv(z.open(file_name), header=None)
+
+    print("Raw rows inside CSV:", len(df))
+
+    return df
+
 
 
 
