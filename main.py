@@ -38,26 +38,25 @@ def get_fno_universe():
 
     return df[["SYMBOL", "TOKEN"]]
 
-# ===============================
-# FETCH DAILY DATA
-# ===============================
 def fetch_daily(token):
     end = datetime.today()
     start = end - timedelta(days=200)
 
-    url = f"{BASE_URL}/sds/history/NSE/{token}/day/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    url = f"{BASE_URL}/sds/history/NSE/{int(token)}/day/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
     headers = {
-        "Authorization": f"Bearer {SESSION_KEY}"
+        "api_session_key": SESSION_KEY
     }
 
     response = requests.get(url, headers=headers, timeout=15)
 
     if response.status_code != 200:
+        print("History fetch failed:", response.status_code, response.text)
         return None
 
     df = pd.read_csv(StringIO(response.text))
     return df
+
 
 # ===============================
 # TD CALCULATION
