@@ -213,6 +213,9 @@ def run():
     print(master_df["INSTRUMENTTYPE"].unique())
     print(master_df["SEGMENT"].unique())
 
+    print("Columns:", master_df.columns.tolist())
+    print(master_df.head(3))
+
     print(f"Filtered NSE Cash universe: {len(master_df)}")
 
     signals_found = 0
