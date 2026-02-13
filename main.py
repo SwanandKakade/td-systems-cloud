@@ -62,15 +62,25 @@ def get_fno_universe():
 
 
 
-def fetch_daily(token):
-    end = datetime.today()
-    start = end - timedelta(days=200)
+def fetch_history(segment, token, interval="120m"):
+    session_key = os.getenv("DEFINEDGE_SESSION_KEY")
 
-    url = f"{BASE_URL}/sds/history/NSE/{int(token)}/day?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}"
+    end = datetime.today()
+    start = end - timedelta(days=120)
+
+    url = (
+        f"{BASE_URL}/sds/history/"
+        f"{segment}/{token}/"
+        f"{interval}/"
+        f"{start.strftime('%Y-%m-%d')}/"
+        f"{end.strftime('%Y-%m-%d')}"
+    )
 
     headers = {
-        "api_session_key": SESSION_KEY
+        "Authorization": f"Bearer {session_key}"
     }
+
+    print("HISTORY URL:", url)
 
     response = requests.get(url, headers=headers, timeout=15)
 
@@ -78,8 +88,10 @@ def fetch_daily(token):
         print("History fetch failed:", response.status_code, response.text)
         return None
 
+    from io import StringIO
     df = pd.read_csv(StringIO(response.text))
     return df
+
 
 
 
