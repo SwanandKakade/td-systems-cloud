@@ -33,16 +33,15 @@ def get_fno_universe():
     filename = z.namelist()[0]
     df = pd.read_csv(z.open(filename))
 
-    df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
-    df = df.drop_duplicates(subset=["SYMBOL"])
+    print("MASTER COLUMNS:", df.columns.tolist())
+    return df.head(5)
 
-    return df[["SYMBOL", "TOKEN"]]
 
 def fetch_daily(token):
     end = datetime.today()
     start = end - timedelta(days=200)
 
-    url = f"{BASE_URL}/sds/history/NSE/{int(token)}/day/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    url = f"{BASE_URL}/sds/history/NSE/{int(token)}/day?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}"
 
     headers = {
         "api_session_key": SESSION_KEY
@@ -56,6 +55,7 @@ def fetch_daily(token):
 
     df = pd.read_csv(StringIO(response.text))
     return df
+
 
 
 # ===============================
