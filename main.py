@@ -193,6 +193,9 @@ def run():
 
     if signals:
         message = "📊 TD Signals:\n\n" + "\n".join(signals[:40])
+        print("Signals list:", signals)
+        print("Calling Telegram...")
+        send_telegram("TEST FROM SCANNER")
         send_telegram(message)
 
 
