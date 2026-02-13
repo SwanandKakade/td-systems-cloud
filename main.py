@@ -101,18 +101,20 @@ def get_fno_universe():
 
     return universe
 
-
-
-
 # ===============================
 # FETCH MINUTE HISTORY
 # ===============================
 
-def fetch_minute_history(segment, token, compression=60):
+ddef fetch_minute_history(segment, token, compression=60):
+
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    url = f"https://data.definedgesecurities.com/sds/minute/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    start_str = start.strftime("%Y-%m-%d")
+    end_str = end.strftime("%Y-%m-%d")
+
+    # ✅ CORRECT ENDPOINT
+    url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/minute/{compression}/{start_str}/{end_str}"
 
     print("HISTORY URL:", url)
 
@@ -128,9 +130,6 @@ def fetch_minute_history(segment, token, compression=60):
 
     df = pd.read_csv(io.StringIO(response.text))
     return df
-
-
-
 
 # ===============================
 # RESAMPLE FUNCTION
