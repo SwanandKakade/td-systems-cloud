@@ -178,156 +178,159 @@ def run():
 
     master = load_master_file()
     if master is None:
-        logging.info("Master unavailable.")
+        logging.error("Master unavailable. Exiting.")
         return
 
     signals = []
+    total_scanned = 0
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
         token = row["TOKEN"]
         symbol = row["SYMBOL"]
 
-        # =====================================================
-        # 1️⃣ DAILY TIMEFRAME
-        # =====================================================
+        total_scanned += 1
 
-        df_daily = fetch_daily(token)
-        if df_daily is None or len(df_daily) < 50:
+        try:
+            # ==========================
+            # 1️⃣ DAILY DATA
+            # ==========================
+            df_daily = fetch_daily(token)
+
+            if df_daily is None or len(df_daily) < 50:
+                continue
+
+            if df_daily["VOLUME"].tail(20).mean() < 100000:
+                continue
+
+            engine_daily = DeMarkEngine(df_daily)
+            daily = engine_daily.run()
+            last_daily = daily.iloc[-1]
+
+            # ==========================
+            # 2️⃣ OPTIONAL 240m DATA
+            # ==========================
+            last_240 = None
+
+            if (
+                last_daily["valid_buy_13"] or
+                last_daily["valid_sell_13"] or
+                last_daily["bull_countdown"] >= 10 or
+                last_daily["bear_countdown"] >= 10
+            ):
+
+                df_240 = fetch_240m(token)
+
+                if df_240 is not None and len(df_240) >= 50:
+                    engine_240 = DeMarkEngine(df_240)
+                    h240 = engine_240.run()
+                    last_240 = h240.iloc[-1]
+
+            # ==========================
+            # 3️⃣ CONFIDENCE SCORING
+            # ==========================
+            buy_conf = 0
+            sell_conf = 0
+
+            # Daily weight
+            if last_daily["valid_buy_13"]:
+                buy_conf += 2
+            if last_daily["perfect_buy"]:
+                buy_conf += 1
+
+            if last_daily["valid_sell_13"]:
+                sell_conf += 2
+            if last_daily["perfect_sell"]:
+                sell_conf += 1
+
+            # 240m weight
+            if last_240 is not None:
+
+                if last_240["valid_buy_13"]:
+                    buy_conf += 2
+                if last_240["perfect_buy"]:
+                    buy_conf += 1
+
+                if last_240["valid_sell_13"]:
+                    sell_conf += 2
+                if last_240["perfect_sell"]:
+                    sell_conf += 1
+
+            # ==========================
+            # 4️⃣ BUILD SIGNALS
+            # ==========================
+
+            # Strong Buy
+            if buy_conf >= 4:
+                signals.append(
+                    f"💎 {symbol} STRONG BUY | Confidence: {buy_conf}"
+                )
+
+            # Strong Sell
+            if sell_conf >= 4:
+                signals.append(
+                    f"⚡ {symbol} STRONG SELL | Confidence: {sell_conf}"
+                )
+
+            # Early setups (density)
+            if last_daily["bull_setup"] in [7, 8]:
+                signals.append(
+                    f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}"
+                )
+
+            if last_daily["bear_setup"] in [7, 8]:
+                signals.append(
+                    f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}"
+                )
+
+            # Countdown progress
+            if last_daily["bull_countdown"] in [10, 11, 12]:
+                signals.append(
+                    f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}"
+                )
+
+            if last_daily["bear_countdown"] in [10, 11, 12]:
+                signals.append(
+                    f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}"
+                )
+
+            # Final 13 Exhaustion
+            if last_daily["valid_buy_13"]:
+                signals.append(
+                    f"🚀 {symbol} DAILY 13 BUY Exhaustion"
+                )
+
+            if last_daily["valid_sell_13"]:
+                signals.append(
+                    f"🔥 {symbol} DAILY 13 SELL Exhaustion"
+                )
+
+        except Exception as e:
+            logging.warning(f"Error processing {symbol}: {e}")
             continue
 
-        # Normalize column names (VERY IMPORTANT)
-        df_daily.columns = [c.lower() for c in df_daily.columns]
+    # ==========================
+    # 5️⃣ TELEGRAM SECTION
+    # ==========================
 
-        # Liquidity filter
-        if df_daily["volume"].tail(20).mean() < 100000:
-            continue
+    logging.info(f"Scan Completed. Symbols scanned: {total_scanned}")
+    logging.info(f"Signals Found: {len(signals)}")
 
-        engine_daily = DeMarkEngine(df_daily)
-        daily = engine_daily.run()
-        last_daily = daily.iloc[-1]
+    if not signals:
+        logging.info("No institutional signals detected.")
+        return
 
-        # -----------------------------
-        # Early Setup Signals (7–9)
-        # -----------------------------
-        if last_daily["bull_setup"] in [7, 8, 9]:
-            signals.append(
-                f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}"
-            )
+    # Remove duplicates
+    signals = list(dict.fromkeys(signals))
 
-        if last_daily["bear_setup"] in [7, 8, 9]:
-            signals.append(
-                f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}"
-            )
+    message = (
+        "📊 TD Institutional Signals\n"
+        f"Scanned: {total_scanned}\n\n"
+        + "\n".join(signals[:40])
+    )
 
-        # -----------------------------
-        # Countdown Progress (11–12)
-        # -----------------------------
-        if last_daily["bull_countdown"] in [11, 12]:
-            signals.append(
-                f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}"
-            )
-
-        if last_daily["bear_countdown"] in [11, 12]:
-            signals.append(
-                f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}"
-            )
-
-        # -----------------------------
-        # Valid 13 Exhaustion
-        # -----------------------------
-        if last_daily["valid_buy_13"]:
-            signals.append(
-                f"🚀 {symbol} DAILY 13 BUY Exhaustion"
-            )
-
-        if last_daily["valid_sell_13"]:
-            signals.append(
-                f"🔥 {symbol} DAILY 13 SELL Exhaustion"
-            )
-
-        # =====================================================
-        # 2️⃣ 240m CONFIRMATION (Only if near exhaustion)
-        # =====================================================
-
-        if not (
-            last_daily["valid_buy_13"] or
-            last_daily["valid_sell_13"] or
-            last_daily["bull_countdown"] >= 11 or
-            last_daily["bear_countdown"] >= 11
-        ):
-            continue
-
-        df_240 = fetch_240m(token)
-        if df_240 is None or len(df_240) < 50:
-            continue
-
-        df_240.columns = [c.lower() for c in df_240.columns]
-
-        engine_240 = DeMarkEngine(df_240)
-        h240 = engine_240.run()
-        last_240 = h240.iloc[-1]
-
-     # ======================
-      # 4️⃣ Multi-Timeframe Alignment + Confidence
-    # ======================
-    
-    confidence = 0
-    direction = None
-    
-    # BUY alignment
-    if last_daily["valid_buy_13"]:
-        confidence += 2
-        direction = "BUY"
-    
-    if last_240["valid_buy_13"]:
-        confidence += 2
-        direction = "BUY"
-    
-    if last_daily["perfect_buy"]:
-        confidence += 1
-    
-    if last_240["perfect_buy"]:
-        confidence += 1
-    
-    # SELL alignment
-    if last_daily["valid_sell_13"]:
-        confidence += 2
-        direction = "SELL"
-    
-    if last_240["valid_sell_13"]:
-        confidence += 2
-        direction = "SELL"
-    
-    if last_daily["perfect_sell"]:
-        confidence += 1
-    
-    if last_240["perfect_sell"]:
-        confidence += 1
-    
-    
-    # Only alert strong institutional alignment
-    if confidence >= 3 and direction:
-    
-        signals.append(
-            f"💎 {symbol} STRONG {direction} | Confidence {confidence}/6"
-        )
-
-
-    # =====================================================
-    # TELEGRAM SECTION
-    # =====================================================
-
-    logging.info(f"Scan Completed. Signals Found: {len(signals)}")
-
-    if signals:
-        message = "📊 TD Institutional Signals:\n\n"
-        message += "\n".join(signals[:40])
-
-        logging.info("Sending Telegram Alert...")
-        send_telegram(message)
-    else:
-        logging.info("No signals generated today.")
+    logging.info("Sending Telegram alert...")
+    send_telegram(message)
 
 if __name__ == "__main__":
     run()
