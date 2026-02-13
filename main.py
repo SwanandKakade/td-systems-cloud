@@ -81,30 +81,29 @@ def get_fno_universe():
 
     df = load_master_file()
 
-    # Normalize column names
     df.columns = df.columns.str.strip().str.upper()
 
-    # Clean instrument type values
+    df["SEGMENT"] = df["SEGMENT"].astype(str).str.strip()
     df["INSTRUMENT TYPE"] = df["INSTRUMENT TYPE"].astype(str).str.strip()
+    df["TRADINGSYM"] = df["TRADINGSYM"].astype(str).str.strip()
 
-    # Filter NFO futures only
-    df = df[
-        (df["SEGMENT"] == "NFO") &
-        (df["INSTRUMENT TYPE"].str.startswith("FUT"))
-    ]
+    # Print debug
+    print("SEGMENTS:", df["SEGMENT"].unique())
+    print("INSTRUMENT TYPES:", df["INSTRUMENT TYPE"].unique())
 
-    # Only current month futures (-I)
-    df = df[df["TRADINGSYM"].str.endswith("-I")]
+    # Filter futures (anything starting with FUT)
+    df = df[df["INSTRUMENT TYPE"].str.startswith("FUT")]
 
-    # Remove duplicates by SYMBOL
-    df = df.drop_duplicates(subset=["SYMBOL"])
+    # Only NFO-like segments
+    df = df[df["SEGMENT"].str.contains("NFO", case=False)]
+
+    # Current month futures only
+    df = df[df["TRADINGSYM"].str.contains("-I")]
 
     universe = []
 
     for _, row in df.iterrows():
-        tradingsym = row["TRADINGSYM"]
-        token = row["TOKEN"]
-        universe.append((tradingsym, token))
+        universe.append((row["TRADINGSYM"], row["TOKEN"]))
 
     print("Filtered F&O universe:", len(universe))
 
