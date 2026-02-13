@@ -240,7 +240,7 @@ def get_daily_trend(df):
 
 def run():
 
-    universe = get_fno_universe()
+    universe = get_cash_universe()
 
     for symbol, token in universe:
 
