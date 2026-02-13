@@ -86,7 +86,11 @@ def get_fno_universe():
 
     # Filter Futures only
     df = df[df["INSTRUMENT TYPE"].isin(["FUTSTK", "FUTIDX"])]
+    df.columns = df.columns.str.strip().str.upper()
 
+    # Only current month futures
+    df = df[df["TRADINGSYM"].str.endswith("-I")]
+    
     # Keep only first occurrence per symbol
     df = df.drop_duplicates(subset=["SYMBOL"])
 
@@ -110,13 +114,7 @@ def fetch_minute_history(segment, token, compression=60):
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    start_str = start.strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
-
-    # ✅ CORRECT ENDPOINT
-    url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/minute/{compression}/{start_str}/{end_str}"
-
-    print("HISTORY URL:", url)
+    url = f"https://data.definedgesecurities.com/sds/minute/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
 
     headers = {
         "Authorization": SESSION_KEY
@@ -128,8 +126,8 @@ def fetch_minute_history(segment, token, compression=60):
         print("History fetch failed:", response.status_code)
         return None
 
-    df = pd.read_csv(io.StringIO(response.text))
-    return df
+    return pd.read_csv(io.StringIO(response.text))
+
 
 # ===============================
 # RESAMPLE FUNCTION
