@@ -251,7 +251,7 @@ def run():
 
         print("Scanning:", symbol)
 
-        df = fetch_history("NSE", token,"60")
+        df = fetch_history("NSE", token)
         if df is None or len(df) < 100:
             continue
 
