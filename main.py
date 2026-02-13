@@ -54,47 +54,23 @@ def load_master_file():
 
     url = "https://app.definedgesecurities.com/public/nsecash.zip"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    response = requests.get(url, headers=headers, timeout=15)
-
+    response = requests.get(url, timeout=30)
     if response.status_code != 200:
         print("Master file HTTP error:", response.status_code)
         return None
 
     print("ZIP size:", len(response.content))
 
-    try:
-        z = zipfile.ZipFile(io.BytesIO(response.content))
-    except Exception as e:
-        print("ZIP error:", e)
-        return None
-
+    z = zipfile.ZipFile(io.BytesIO(response.content))
+    file_name = z.namelist()[0]
     print("Files inside ZIP:", z.namelist())
 
-    file_name = z.namelist()[0]
+    df = pd.read_csv(z.open(file_name))
 
-    df = pd.read_csv(z.open(file_name), header=None)
-
-    df.columns = [
-    "TOKEN",
-    "SYMBOL",
-    "SERIES",
-    "TICKSIZE",
-    "LOTSIZE",
-    "ISIN",
-    "COMPANY"
-    ]
-
-
-    print("Raw rows inside CSV:", len(df))
+    print("Columns:", df.columns.tolist())
+    print("Total rows:", len(df))
 
     return df
-
-
-
 
 # ==============================
 # FETCH HISTORY
