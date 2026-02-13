@@ -141,19 +141,36 @@ def fetch_history(segment, token):
 # RESAMPLE FUNCTION
 # ===============================
 
-def resample_tf(df, rule):
-    df["DateTime"] = pd.to_datetime(df["DateTime"])
-    df.set_index("DateTime", inplace=True)
+def resample_tf(df, tf="60min"):
 
-    df_tf = df.resample(rule).agg({
-        "Open": "first",
-        "High": "max",
-        "Low": "min",
-        "Close": "last",
-        "Volume": "sum"
+    df.columns = df.columns.str.strip().str.upper()
+
+    # If DATE + TIME separate
+    if "DATE" in df.columns and "TIME" in df.columns:
+        df["DATETIME"] = pd.to_datetime(
+            df["DATE"] + " " + df["TIME"],
+            format="%d-%m-%Y %H:%M"
+        )
+
+    # If DATETIME already exists
+    elif "DATETIME" in df.columns:
+        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+
+    else:
+        raise Exception("No DATETIME column found in API response")
+
+    df.set_index("DATETIME", inplace=True)
+
+    df = df.resample(tf).agg({
+        "OPEN": "first",
+        "HIGH": "max",
+        "LOW": "min",
+        "CLOSE": "last",
+        "VOLUME": "sum"
     }).dropna()
 
-    return df_tf
+    return df
+
 
 # ===============================
 # TD SETUP + COUNTDOWN
