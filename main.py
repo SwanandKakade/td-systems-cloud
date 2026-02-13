@@ -5,6 +5,9 @@ import zipfile
 import io
 import logging
 from datetime import datetime, timedelta
+from demark_engine import DeMarkEngine
+
+
 
 # Safe tqdm import (Railway safe)
 try:
@@ -142,7 +145,7 @@ def td_countdown(df):
 
 def run():
 
-    logging.info("Starting TD Sequential Scanner...")
+    logging.info("Starting TD Institutional Scanner...")
 
     master = load_master_file()
     if master is None:
@@ -156,48 +159,88 @@ def run():
         token = row["TOKEN"]
         symbol = row["SYMBOL"]
 
-        df = fetch_daily(token)
-        if df is None or len(df) < 20:
+        # ======================
+        # 1️⃣ DAILY TIMEFRAME
+        # ======================
+
+        df_daily = fetch_daily(token)
+        if df_daily is None or len(df_daily) < 50:
             continue
 
         # Volume filter
-        if df["VOLUME"].tail(20).mean() < 100000:
+        if df_daily["VOLUME"].tail(20).mean() < 100000:
             continue
 
-        df = td_setup(df)
-        df = td_countdown(df)
+        engine_daily = DeMarkEngine(df_daily)
+        daily = engine_daily.run()
+        last_daily = daily.iloc[-1]
 
-        last = df.iloc[-1]
+        # Density boost (early signals)
+        if last_daily["bull_setup"] in [6, 7, 8, 9]:
+            signals.append(f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}")
 
-        # Setup density boost
-        if last["bull_setup"] in [6,7,8,9]:
-            signals.append(f"🟢 {symbol} Bull Setup {int(last['bull_setup'])}")
+        if last_daily["bear_setup"] in [6, 7, 8, 9]:
+            signals.append(f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}")
 
-        if last["bear_setup"] in [6,7,8,9]:
-            signals.append(f"🔴 {symbol} Bear Setup {int(last['bear_setup'])}")
+        # Countdown progress
+        if last_daily["bull_countdown"] in [10, 11, 12]:
+            signals.append(f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}")
 
-        # Countdown alerts
-        if last["bull_countdown"] in [10,11,12]:
-            signals.append(f"🟢 {symbol} Bull Countdown {int(last['bull_countdown'])}")
+        if last_daily["bear_countdown"] in [10, 11, 12]:
+            signals.append(f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}")
 
-        if last["bull_countdown"] == 13:
-            signals.append(f"🚀 {symbol} Bullish 13 Exhaustion")
+        # ======================
+        # 2️⃣ DAILY 13 EXHAUSTION
+        # ======================
 
-        if last["bear_countdown"] in [10,11,12]:
-            signals.append(f"🔴 {symbol} Bear Countdown {int(last['bear_countdown'])}")
+        if last_daily["valid_buy_13"]:
+            signals.append(f"🚀 {symbol} DAILY 13 BUY Exhaustion")
 
-        if last["bear_countdown"] == 13:
-            signals.append(f"🔥 {symbol} Bearish 13 Exhaustion")
+        if last_daily["valid_sell_13"]:
+            signals.append(f"🔥 {symbol} DAILY 13 SELL Exhaustion")
+
+        # ======================
+        # 3️⃣ 240m CONFIRMATION
+        # Only check 240m if Daily near exhaustion
+        # ======================
+
+        if not (
+            last_daily["valid_buy_13"] or
+            last_daily["valid_sell_13"] or
+            last_daily["bull_countdown"] >= 10 or
+            last_daily["bear_countdown"] >= 10
+        ):
+            continue
+
+        df_240 = fetch_240m(token)
+        if df_240 is None or len(df_240) < 50:
+            continue
+
+        engine_240 = DeMarkEngine(df_240)
+        h240 = engine_240.run()
+        last_240 = h240.iloc[-1]
+
+        # ======================
+        # 4️⃣ Multi-Timeframe Strength
+        # ======================
+
+        if last_daily["valid_buy_13"] and last_240["valid_buy_13"]:
+            signals.append(f"💎 {symbol} STRONG BUY (Daily + 240m 13 Alignment)")
+
+        if last_daily["valid_sell_13"] and last_240["valid_sell_13"]:
+            signals.append(f"⚡ {symbol} STRONG SELL (Daily + 240m 13 Alignment)")
+
+    # ======================
+    # TELEGRAM SECTION
+    # ======================
 
     logging.info(f"Scan Completed. Signals Found: {len(signals)}")
 
     if signals:
-        message = "📊 TD Signals:\n\n" + "\n".join(signals[:40])
-        print("Signals list:", signals)
-        print("Calling Telegram...")
-        send_telegram("TEST FROM SCANNER")
-        send_telegram(message)
+        message = "📊 TD Institutional Signals:\n\n" + "\n".join(signals[:40])
 
+        logging.info("Sending Telegram Alert...")
+        send_telegram(message)
 
 if __name__ == "__main__":
     run()
