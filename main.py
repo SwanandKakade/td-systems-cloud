@@ -1,231 +1,190 @@
-import os
-import io
-import time
-import zipfile
 import requests
 import pandas as pd
+import io
+import zipfile
+import time
 from datetime import datetime, timedelta
+from pandas.errors import EmptyDataError
 
-SESSION_KEY = os.getenv("DEFINEDGE_SESSION_KEY")
+# ==============================
+# CONFIG
+# ==============================
 
+SESSION_KEY = "YOUR_SESSION_KEY"
+MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 BASE_HISTORY_URL = "https://data.definedgesecurities.com/sds/history"
-MASTER_URL = "https://app.definedgesecurities.com/public/nsecm.zip"
+
+HEADERS = {"Authorization": SESSION_KEY}
+
+DAILY_LOOKBACK_DAYS = 400
+MIN_VOLUME = 200000  # Volume filter
+SLEEP_SECONDS = 0.15  # API rate protection
 
 
-# =====================================================
-# MASTER FILE (LOAD ONCE)
-# =====================================================
+# ==============================
+# MASTER FILE LOADER
+# ==============================
+
 def load_master_file():
     print("Downloading NSE Cash master file...")
 
-    response = requests.get(MASTER_URL)
-    z = zipfile.ZipFile(io.BytesIO(response.content))
+    try:
+        response = requests.get(MASTER_URL, timeout=20)
 
-    file_name = z.namelist()[0]
+        if response.status_code != 200:
+            print("Master download failed:", response.status_code)
+            return None
 
-    df = pd.read_csv(z.open(file_name), header=None)
+        if not response.content.startswith(b'PK'):
+            print("Invalid master response (not ZIP).")
+            return None
 
-    df.columns = [
-        "SEGMENT", "TOKEN", "SYMBOL", "TRADINGSYM", "SERIES",
-        "TICKSIZE", "LOTSIZE", "ISIN",
-        "PRICEPREC", "MULTIPLIER", "PRICEMULT", "COMPANY"
-    ]
+        z = zipfile.ZipFile(io.BytesIO(response.content))
+        file_name = z.namelist()[0]
+        df = pd.read_csv(z.open(file_name))
 
-    print("Master file loaded. Rows:", len(df))
-    return df
+        print("Master file loaded. Rows:", len(df))
+        return df
 
-
-def get_nse_cash_universe(master_df):
-    df = master_df.copy()
-    df.columns = df.columns.str.strip().str.upper()
-
-    df = df[(df["SEGMENT"] == "NSE") & (df["SERIES"] == "EQ")]
-
-    universe = list(zip(df["SYMBOL"], df["TOKEN"]))
-
-    print("Filtered NSE Cash universe:", len(universe))
-    return universe
+    except Exception as e:
+        print("Master file error:", e)
+        return None
 
 
-# =====================================================
-# SAFE HISTORY FETCH
-# =====================================================
+# ==============================
+# FETCH HISTORY (SAFE)
+# ==============================
+
 def fetch_history(segment, token, timeframe="day"):
-
-    end = datetime.now()
-    start = end - timedelta(days=180)
-
-    from_date = start.strftime("%d%m%Y") + "0915"
-    to_date   = end.strftime("%d%m%Y") + "1530"
-
-    url = f"{BASE_HISTORY_URL}/{segment}/{token}/{timeframe}/{from_date}/{to_date}"
-
-    headers = {"Authorization": SESSION_KEY}
-
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-    except:
-        return None
+        to_date = datetime.now().strftime("%d%m%Y1530")
+        from_date = (datetime.now() - timedelta(days=DAILY_LOOKBACK_DAYS)).strftime("%d%m%Y0915")
 
-    if response.status_code != 200:
-        return None
+        url = f"{BASE_HISTORY_URL}/{segment}/{token}/{timeframe}/{from_date}/{to_date}"
 
-    if not response.text.strip():
-        return None
+        response = requests.get(url, headers=HEADERS, timeout=20)
 
-    try:
+        if response.status_code != 200:
+            return None
+
+        if not response.text.strip():
+            return None
+
         df = pd.read_csv(io.StringIO(response.text), header=None)
-    except:
+
+        if df.empty:
+            return None
+
+        # Assign columns
+        df.columns = ["DATETIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
+
+        return df
+
+    except EmptyDataError:
+        return None
+    except Exception:
         return None
 
-    if df.empty:
-        return None
 
-    df.columns = ["DATETIME", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]
-    df["DATETIME"] = pd.to_datetime(df["DATETIME"], format="%d%m%Y%H%M")
+# ==============================
+# TD SEQUENTIAL (Basic Setup)
+# ==============================
 
-    return df
-
-
-# =====================================================
-# RESAMPLE
-# =====================================================
-def resample_tf(df, tf="60min"):
-
+def td_setup(df):
     df = df.copy()
-    df.set_index("DATETIME", inplace=True)
+    df["CLOSE"] = pd.to_numeric(df["CLOSE"], errors="coerce")
+    df = df.dropna()
 
-    df = df.resample(tf).agg({
-        "OPEN": "first",
-        "HIGH": "max",
-        "LOW": "min",
-        "CLOSE": "last",
-        "VOLUME": "sum"
-    }).dropna()
-
-    df.reset_index(inplace=True)
-    return df
-
-
-# =====================================================
-# TD SEQUENTIAL LOGIC
-# =====================================================
-def td_sequential(df):
-
-    df = df.copy()
-    df["TD_SETUP"] = 0
-    df["TD_COUNTDOWN"] = 0
-
-    setup_count = 0
-    countdown = 0
+    df["TD"] = 0
 
     for i in range(4, len(df)):
-
-        # BUY setup
-        if df["CLOSE"].iloc[i] < df["CLOSE"].iloc[i-4]:
-            setup_count += 1
+        if df["CLOSE"].iloc[i] > df["CLOSE"].iloc[i - 4]:
+            df.loc[df.index[i], "TD"] = df["TD"].iloc[i - 1] + 1
         else:
-            setup_count = 0
-
-        df.loc[df.index[i], "TD_SETUP"] = setup_count
-
-        # Countdown (simplified version)
-        if setup_count >= 9:
-            if df["CLOSE"].iloc[i] <= df["LOW"].iloc[i-2]:
-                countdown += 1
-            df.loc[df.index[i], "TD_COUNTDOWN"] = countdown
+            df.loc[df.index[i], "TD"] = 0
 
     return df
 
 
-# =====================================================
-# VOLUME FILTER
-# =====================================================
-def passes_volume_filter(df, min_avg_volume=500000):
+# ==============================
+# MAIN RUN LOGIC
+# ==============================
 
-    avg_vol = df["VOLUME"].tail(20).mean()
-
-    return avg_vol >= min_avg_volume
-
-
-# =====================================================
-# DAILY TD FILTER (7/8/9)
-# =====================================================
-def near_td_setup(df):
-
-    df = td_sequential(df)
-
-    if len(df) < 10:
-        return False
-
-    last = df.iloc[-1]
-
-    return last["TD_SETUP"] in [7, 8, 9]
-
-
-# =====================================================
-# MAIN RUN
-# =====================================================
 def run():
-
     print("Starting TD Sequential Scanner...")
 
     master_df = load_master_file()
-    universe = get_nse_cash_universe(master_df)
+
+    if master_df is None:
+        print("Master unavailable. Exiting safely.")
+        return
+
+    if "TOKEN" not in master_df.columns:
+        print("TOKEN column missing in master.")
+        return
+
+    universe = master_df.dropna(subset=["TOKEN"])
+    print("Filtered NSE Cash universe:", len(universe))
+
+    shortlisted = []
 
     total = len(universe)
-    shortlist = []
+    count = 0
 
-    print("\n--- DAILY SCAN START ---\n")
+    for _, row in universe.iterrows():
+        count += 1
+        symbol = str(row.get("SYMBOL", "UNKNOWN"))
+        token = row["TOKEN"]
 
-    for i, (symbol, token) in enumerate(universe, start=1):
-
-        print(f"[{i}/{total}] Daily scan: {symbol}")
+        print(f"[{count}/{total}] Scanning: {symbol}")
 
         df_daily = fetch_history("NSE", token, "day")
+        time.sleep(SLEEP_SECONDS)
 
         if df_daily is None:
             continue
 
-        if not passes_volume_filter(df_daily):
+        # Volume filter
+        df_daily["VOLUME"] = pd.to_numeric(df_daily["VOLUME"], errors="coerce")
+        if df_daily["VOLUME"].iloc[-1] < MIN_VOLUME:
             continue
 
-        if not near_td_setup(df_daily):
-            continue
+        df_daily = td_setup(df_daily)
 
-        shortlist.append((symbol, token))
+        latest_td = df_daily["TD"].iloc[-1]
 
-        time.sleep(0.2)
+        # Near 7/8/9 filter
+        if latest_td in [7, 8, 9]:
+            print("  → Near TD Setup:", latest_td)
+            shortlisted.append((symbol, token, latest_td))
 
-    print("\nDaily shortlist:", len(shortlist))
+    print("\nShortlisted Stocks:", len(shortlisted))
 
-    print("\n--- 60 MIN SCAN START ---\n")
+    # ==============================
+    # FETCH MINUTE DATA ONLY FOR SHORTLIST
+    # ==============================
 
-    for i, (symbol, token) in enumerate(shortlist, start=1):
-
-        print(f"[{i}/{len(shortlist)}] 60m scan: {symbol}")
+    for symbol, token, td_val in shortlisted:
+        print(f"Fetching minute data for {symbol} (TD={td_val})")
 
         df_min = fetch_history("NSE", token, "minute")
+        time.sleep(SLEEP_SECONDS)
 
         if df_min is None:
+            print("  → Minute data unavailable")
             continue
 
-        df_60m = resample_tf(df_min, "60min")
-        df_60m = td_sequential(df_60m)
+        print(f"  → Minute candles fetched: {len(df_min)}")
 
-        last = df_60m.iloc[-1]
-
-        if last["TD_SETUP"] == 9:
-            print(f"TD9 ACTIVE → {symbol}")
-
-        if last["TD_COUNTDOWN"] >= 13:
-            print(f"TD13 COMPLETE → {symbol}")
-
-        time.sleep(0.2)
+    print("\nScan Complete.")
 
 
-# =====================================================
-# ENTRY POINT
-# =====================================================
+# ==============================
+# SAFE ENTRY POINT
+# ==============================
+
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as e:
+        print("Fatal error caught safely:", e)
