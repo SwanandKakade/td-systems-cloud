@@ -104,9 +104,6 @@ def get_cash_universe():
 
     return universe
 
-
-
-
 # ===============================
 # FETCH  HISTORY
 # ===============================
@@ -116,7 +113,11 @@ def fetch_history(segment, token, compression=60):
     end = datetime.today()
     start = end - timedelta(days=120)
 
-    url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/{compression}/{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    url = (
+        f"https://data.definedgesecurities.com/sds/history/"
+        f"{segment}/{token}/minute/{compression}/"
+        f"{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
+    )
 
     print("HISTORY URL:", url)
 
@@ -130,10 +131,7 @@ def fetch_history(segment, token, compression=60):
         print("History fetch failed:", response.status_code)
         return None
 
-    df = pd.read_csv(io.StringIO(response.text))
-    return df
-
-
+    return pd.read_csv(io.StringIO(response.text))
 
 # ===============================
 # RESAMPLE FUNCTION
