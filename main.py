@@ -50,18 +50,22 @@ def fetch_data(token, timeframe, days):
         end = datetime.now()
         start = end - timedelta(days=days)
 
+        start_str = start.strftime("%d%m%Y") + "0000"
+        end_str = end.strftime("%d%m%Y%H%M")  # use real current time
+        
         url = (
             f"https://data.definedgesecurities.com/sds/history/NSE/"
             f"{token}/{timeframe}/"
-            f"{start.strftime('%d%m%Y')}0000/"
-            f"{end.strftime('%d%m%Y')}2359"
+            f"{start_str}/"
+            f"{end_str}"
         )
+
         logging.warning(f"URL: {url}")
         headers = {
                     "Authorization": DEFINEDGE_SESSION.strip()
                 }
         print("Session:", DEFINEDGE_SESSION)
-
+        print("Header:", headers)
         r = requests.get(url, headers=headers, timeout=10)
 
         # HTTP failure
