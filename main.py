@@ -57,9 +57,12 @@ def fetch_data(token, timeframe, days):
             f"{end.strftime('%d%m%Y')}2359"
         )
         logging.warning(f"URL: {url}")
-        headers = {"Authorization": DEFINEDGE_SESSION}
+        headers = {
+            "Authorization": f"Bearer {DEFINEDGE_SESSION.strip()}",
+            "Content-Type": "application/json"
+                    }
 
-        r = requests.get(url, headers=headers, timeout=100)
+        r = requests.get(url, headers=headers, timeout=10)
 
         # HTTP failure
         if r.status_code != 200:
