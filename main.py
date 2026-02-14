@@ -4,12 +4,11 @@ import pandas as pd
 import zipfile
 import io
 import logging
+import numpy as np
 from datetime import datetime, timedelta
 from demark_engine import DeMarkEngine
 
-
-
-# Safe tqdm import (Railway safe)
+# ---------------- SAFE TQDM ---------------- #
 try:
     from tqdm import tqdm
 except:
@@ -50,7 +49,6 @@ def load_master_file():
         csv_file = z.namelist()[0]
         df = pd.read_csv(z.open(csv_file))
 
-        # Assign correct columns
         df.columns = [
             "EXCHANGE","TOKEN","SYMBOL","TRADINGSYM",
             "INSTRUMENTTYPE","EXPIRY","TICKSIZE","LOTSIZE",
@@ -65,50 +63,49 @@ def load_master_file():
         logging.info(f"Master load failed: {e}")
         return None
 
-# ---------------- HISTORY ---------------- #
+# ---------------- HISTORY FUNCTIONS ---------------- #
 
 def fetch_daily(token):
     try:
         end = datetime.now()
-        start = end - timedelta(days=120)
+        start = end - timedelta(days=200)
 
         url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/day/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
 
         headers = {"Authorization": DEFINEDGE_SESSION}
-
         r = requests.get(url, headers=headers)
+
         if r.status_code != 200:
             return None
 
         df = pd.read_csv(io.StringIO(r.text))
-
         if df.empty:
             return None
 
         df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
         df["DATETIME"] = pd.to_datetime(df["DATETIME"])
         df = df.sort_values("DATETIME")
+
         return df
 
     except:
         return None
 
 
-def fetch_240m(token):
+def fetch_1h(token):
     try:
         end = datetime.now()
-        start = end - timedelta(days=60)   # 240m needs less history
+        start = end - timedelta(days=30)
 
-        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/240/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/60/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
 
         headers = {"Authorization": DEFINEDGE_SESSION}
-
         r = requests.get(url, headers=headers)
+
         if r.status_code != 200:
             return None
 
         df = pd.read_csv(io.StringIO(r.text))
-
         if df.empty:
             return None
 
@@ -121,54 +118,16 @@ def fetch_240m(token):
     except:
         return None
 
+# ---------------- SIGNAL AGE CLASSIFIER ---------------- #
 
-# ---------------- TD LOGIC ---------------- #
-
-def td_setup(df):
-
-    df["bull_setup"] = 0
-    df["bear_setup"] = 0
-
-    for i in range(4, len(df)):
-        if df["CLOSE"].iloc[i] < df["CLOSE"].iloc[i-4]:
-            df.loc[df.index[i], "bull_setup"] = df["bull_setup"].iloc[i-1] + 1
-        else:
-            df.loc[df.index[i], "bull_setup"] = 0
-
-        if df["CLOSE"].iloc[i] > df["CLOSE"].iloc[i-4]:
-            df.loc[df.index[i], "bear_setup"] = df["bear_setup"].iloc[i-1] + 1
-        else:
-            df.loc[df.index[i], "bear_setup"] = 0
-
-    return df
-
-def td_countdown(df):
-
-    df["bull_countdown"] = 0
-    df["bear_countdown"] = 0
-
-    bull_cd = 0
-    bear_cd = 0
-
-    for i in range(2, len(df)):
-
-        if df["bull_setup"].iloc[i] >= 9:
-            bull_cd = 0
-
-        if df["bear_setup"].iloc[i] >= 9:
-            bear_cd = 0
-
-        # Bullish countdown
-        if df["CLOSE"].iloc[i] <= df["LOW"].iloc[i-2]:
-            bull_cd += 1
-            df.loc[df.index[i], "bull_countdown"] = bull_cd
-
-        # Bearish countdown
-        if df["CLOSE"].iloc[i] >= df["HIGH"].iloc[i-2]:
-            bear_cd += 1
-            df.loc[df.index[i], "bear_countdown"] = bear_cd
-
-    return df
+def classify_age(age):
+    if age is None:
+        return "Neutral"
+    if age <= 3:
+        return "Fresh"
+    if age <= 8:
+        return "Active"
+    return "Expired"
 
 # ---------------- RUN ---------------- #
 
@@ -178,10 +137,10 @@ def run():
 
     master = load_master_file()
     if master is None:
-        logging.error("Master unavailable. Exiting.")
+        logging.error("Master unavailable.")
         return
 
-    signals = []
+    table_rows = []
     total_scanned = 0
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
@@ -192,145 +151,112 @@ def run():
         total_scanned += 1
 
         try:
-            # ==========================
-            # 1️⃣ DAILY DATA
-            # ==========================
+            # =======================
+            # DAILY TIMEFRAME
+            # =======================
             df_daily = fetch_daily(token)
-
-            if df_daily is None or len(df_daily) < 50:
+            if df_daily is None or len(df_daily) < 200:
                 continue
 
             if df_daily["VOLUME"].tail(20).mean() < 100000:
                 continue
 
-            engine_daily = DeMarkEngine(df_daily)
-            daily = engine_daily.run()
-            last_daily = daily.iloc[-1]
+            # 200 EMA
+            df_daily["EMA200"] = df_daily["CLOSE"].ewm(span=200).mean()
+            last_daily_close = df_daily["CLOSE"].iloc[-1]
+            last_ema200 = df_daily["EMA200"].iloc[-1]
 
-            # ==========================
-            # 2️⃣ OPTIONAL 240m DATA
-            # ==========================
-            last_240 = None
+            daily_trend_bull = last_daily_close > last_ema200
+            daily_trend_bear = last_daily_close < last_ema200
 
-            if (
-                last_daily["valid_buy_13"] or
-                last_daily["valid_sell_13"] or
-                last_daily["bull_countdown"] >= 10 or
-                last_daily["bear_countdown"] >= 10
-            ):
+            # =======================
+            # 1H TIMEFRAME
+            # =======================
+            df_1h = fetch_1h(token)
+            if df_1h is None or len(df_1h) < 50:
+                continue
 
-                df_240 = fetch_240m(token)
+            engine_1h = DeMarkEngine(df_1h)
+            h1 = engine_1h.run()
+            last_1h = h1.iloc[-1]
 
-                if df_240 is not None and len(df_240) >= 50:
-                    engine_240 = DeMarkEngine(df_240)
-                    h240 = engine_240.run()
-                    last_240 = h240.iloc[-1]
+            # =======================
+            # CONFIDENCE SCORING
+            # =======================
+            confidence = 0
+            final_signal = None
+            signal_age = None
 
-            # ==========================
-            # 3️⃣ CONFIDENCE SCORING
-            # ==========================
-            buy_conf = 0
-            sell_conf = 0
+            # BUY
+            if daily_trend_bull and last_1h["valid_buy_13"]:
+                final_signal = "Buy Exhaustion"
+                confidence += 3
 
-            # Daily weight
-            if last_daily["valid_buy_13"]:
-                buy_conf += 2
-            if last_daily["perfect_buy"]:
-                buy_conf += 1
+            if daily_trend_bull and last_1h["perfect_buy"]:
+                confidence += 1
 
-            if last_daily["valid_sell_13"]:
-                sell_conf += 2
-            if last_daily["perfect_sell"]:
-                sell_conf += 1
+            # SELL
+            if daily_trend_bear and last_1h["valid_sell_13"]:
+                final_signal = "Sell Exhaustion"
+                confidence += 3
 
-            # 240m weight
-            if last_240 is not None:
+            if daily_trend_bear and last_1h["perfect_sell"]:
+                confidence += 1
 
-                if last_240["valid_buy_13"]:
-                    buy_conf += 2
-                if last_240["perfect_buy"]:
-                    buy_conf += 1
+            if final_signal is None:
+                continue
 
-                if last_240["valid_sell_13"]:
-                    sell_conf += 2
-                if last_240["perfect_sell"]:
-                    sell_conf += 1
+            # =======================
+            # SIGNAL AGING
+            # =======================
+            if final_signal == "Buy Exhaustion":
+                valid_indices = h1.index[h1["valid_buy_13"] == True]
+            else:
+                valid_indices = h1.index[h1["valid_sell_13"] == True]
 
-            # ==========================
-            # 4️⃣ BUILD SIGNALS
-            # ==========================
+            if len(valid_indices) > 0:
+                last_signal_index = valid_indices[-1]
+                age = len(h1) - h1.index.get_loc(last_signal_index) - 1
+                signal_age = classify_age(age)
+            else:
+                signal_age = "Fresh"
 
-            # Strong Buy
-            if buy_conf >= 4:
-                signals.append(
-                    f"💎 {symbol} STRONG BUY | Confidence: {buy_conf}"
-                )
-
-            # Strong Sell
-            if sell_conf >= 4:
-                signals.append(
-                    f"⚡ {symbol} STRONG SELL | Confidence: {sell_conf}"
-                )
-
-            # Early setups (density)
-            if last_daily["bull_setup"] in [7, 8]:
-                signals.append(
-                    f"🟢 {symbol} Daily Bull Setup {int(last_daily['bull_setup'])}"
-                )
-
-            if last_daily["bear_setup"] in [7, 8]:
-                signals.append(
-                    f"🔴 {symbol} Daily Bear Setup {int(last_daily['bear_setup'])}"
-                )
-
-            # Countdown progress
-            if last_daily["bull_countdown"] in [10, 11, 12]:
-                signals.append(
-                    f"🟢 {symbol} Daily Bull Countdown {int(last_daily['bull_countdown'])}"
-                )
-
-            if last_daily["bear_countdown"] in [10, 11, 12]:
-                signals.append(
-                    f"🔴 {symbol} Daily Bear Countdown {int(last_daily['bear_countdown'])}"
-                )
-
-            # Final 13 Exhaustion
-            if last_daily["valid_buy_13"]:
-                signals.append(
-                    f"🚀 {symbol} DAILY 13 BUY Exhaustion"
-                )
-
-            if last_daily["valid_sell_13"]:
-                signals.append(
-                    f"🔥 {symbol} DAILY 13 SELL Exhaustion"
-                )
+            # =======================
+            # BUILD ROW
+            # =======================
+            table_rows.append({
+                "symbol": symbol,
+                "h1": "Yes",
+                "daily": "Bull" if daily_trend_bull else "Bear",
+                "signal": final_signal,
+                "status": signal_age,
+                "confidence": confidence
+            })
 
         except Exception as e:
             logging.warning(f"Error processing {symbol}: {e}")
             continue
 
-    # ==========================
-    # 5️⃣ TELEGRAM SECTION
-    # ==========================
+    # =======================
+    # TELEGRAM OUTPUT
+    # =======================
 
     logging.info(f"Scan Completed. Symbols scanned: {total_scanned}")
-    logging.info(f"Signals Found: {len(signals)}")
 
-    if not signals:
-        logging.info("No institutional signals detected.")
+    if not table_rows:
+        logging.info("No aligned institutional signals.")
         return
 
-    # Remove duplicates
-    signals = list(dict.fromkeys(signals))
+    message = "📊 TD Institutional Scanner\n\n"
+    message += "Symbol | 1H | Daily | Signal | Status | Conf\n"
+    message += "------------------------------------------------\n"
 
-    message = (
-        "📊 TD Institutional Signals\n"
-        f"Scanned: {total_scanned}\n\n"
-        + "\n".join(signals[:40])
-    )
+    for row in table_rows[:25]:
+        message += f"{row['symbol']} | {row['h1']} | {row['daily']} | {row['signal']} | {row['status']} | {row['confidence']}\n"
 
-    logging.info("Sending Telegram alert...")
     send_telegram(message)
+    logging.info("Telegram alert sent.")
+
 
 if __name__ == "__main__":
     run()
