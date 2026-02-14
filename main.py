@@ -58,9 +58,8 @@ def fetch_data(token, timeframe, days):
         )
         logging.warning(f"URL: {url}")
         headers = {
-            "Authorization": f"Bearer {DEFINEDGE_SESSION.strip()}",
-            "Content-Type": "application/json"
-                    }
+                    "Authorization": DEFINEDGE_SESSION.strip()
+                }
 
         r = requests.get(url, headers=headers, timeout=10)
 
