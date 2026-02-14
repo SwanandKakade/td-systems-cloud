@@ -22,8 +22,8 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 
-# ⚠️ Put correct NIFTY token here
-NIFTY_TOKEN = "26000"  # <-- Replace with correct token from master file
+# Put correct NIFTY token from master
+NIFTY_TOKEN = "26000"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -44,11 +44,11 @@ def send_telegram(message):
 
 def load_master_file():
     try:
-        response = requests.get(MASTER_URL)
-        if response.status_code != 200:
+        r = requests.get(MASTER_URL)
+        if r.status_code != 200:
             return None
 
-        z = zipfile.ZipFile(io.BytesIO(response.content))
+        z = zipfile.ZipFile(io.BytesIO(r.content))
         df = pd.read_csv(z.open(z.namelist()[0]))
 
         df.columns = [
@@ -72,7 +72,7 @@ def fetch_data(token, timeframe, days):
         end = datetime.now()
         start = end - timedelta(days=days)
 
-        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/{timeframe}/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/{timeframe}/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359}"
 
         headers = {"Authorization": DEFINEDGE_SESSION}
 
@@ -99,7 +99,7 @@ def fetch_data(token, timeframe, days):
 
 def run():
 
-    logging.info("Starting TD Framework v1.1 Scanner...")
+    logging.info("Starting TD Framework v1.2 Scanner...")
 
     master = load_master_file()
     if master is None:
@@ -107,7 +107,7 @@ def run():
         return
 
     # Fetch Nifty once
-    nifty_df = fetch_data(NIFTY_TOKEN, "day", 200)
+    nifty_df = fetch_data(NIFTY_TOKEN, "day", 250)
     if nifty_df is None or len(nifty_df) < 100:
         logging.error("Nifty data unavailable.")
         return
@@ -127,15 +127,14 @@ def run():
 
             # ================= DAILY ================= #
 
-            daily_df = fetch_data(token, "day", 200)
-            if daily_df is None or len(daily_df) < 100:
+            daily_df = fetch_data(token, "day", 250)
+            if daily_df is None or len(daily_df) < 150:
                 continue
 
-            daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200).mean()
-
+            daily_df["SMA200"] = daily_df["CLOSE"].rolling(200).mean()
             daily_df = daily_df.set_index("DATETIME")
 
-            # Ratio strength
+            # Ratio Strength
             merged = daily_df.join(
                 nifty_df["CLOSE"],
                 how="inner",
@@ -145,79 +144,86 @@ def run():
             merged["RATIO"] = merged["CLOSE"] / merged["CLOSE_NIFTY"]
             merged["RATIO_EMA"] = merged["RATIO"].ewm(span=20).mean()
 
-            ratio_strong = (
-                merged["RATIO"].iloc[-1] >
-                merged["RATIO_EMA"].iloc[-1]
-            )
+            ratio_strong = merged["RATIO"].iloc[-1] > merged["RATIO_EMA"].iloc[-1]
 
-            # Run TD Engine
             engine_daily = DeMarkEngine(daily_df.reset_index())
             daily = engine_daily.run()
-            last_daily = daily.iloc[-1]
+            d = daily.iloc[-1]
+
+            # Bias
+            bullish_bias = daily_df["CLOSE"].iloc[-1] > daily_df["SMA200"].iloc[-1]
+            bias = "Bull" if bullish_bias else "Bear"
 
             # ================= 1H ================= #
 
-            hourly_df = fetch_data(token, "60", 30)
-            if hourly_df is None or len(hourly_df) < 50:
+            hourly_df = fetch_data(token, "60", 40)
+            if hourly_df is None or len(hourly_df) < 80:
                 continue
 
             engine_hour = DeMarkEngine(hourly_df)
             hourly = engine_hour.run()
-            last_hour = hourly.iloc[-1]
+            h = hourly.iloc[-1]
 
             # ================= CLASSIFICATION ================= #
 
             signal = None
             confidence = 0
 
-            bullish_bias = last_daily["close"] > daily_df["EMA200"].iloc[-1]
+            # ----- STRONG SELL -----
+            if d["td13_sell_status"] in ["Fresh","Active"] and \
+               h["td13_sell_status"] in ["Fresh","Active"]:
 
-            # Fresh Buy
-            if bullish_bias and last_hour["valid_buy_13"]:
-                signal = "Fresh Buy"
-                confidence += 2
-
-            # Strong Sell
-            if last_daily["valid_sell_13"] and last_hour["valid_sell_13"]:
                 signal = "Strong Sell"
                 confidence += 2
 
-            # Early Exhaustion
-            if last_daily["td9_buy"]:
-                signal = "Early Buy Exhaustion"
+            # ----- FRESH BUY -----
+            elif bullish_bias and \
+                 h["td13_buy_status"] in ["Fresh","Active"]:
 
-            if last_daily["td9_sell"]:
-                signal = "Early Sell Exhaustion"
-
-            # Intraday Exhaustion
-            if last_hour["td9_buy"]:
-                signal = "Intraday Buy Exhaustion"
-
-            if last_hour["td9_sell"]:
-                signal = "Intraday Sell Exhaustion"
-
-            # ================= CONFIDENCE ================= #
-
-            if last_daily["valid_buy_13"]:
+                signal = "Fresh Buy"
                 confidence += 2
 
-            if last_hour["valid_buy_13"]:
+            # ----- EARLY EXHAUSTION (Daily TD9) -----
+            elif d["td9_buy_status"] in ["Fresh","Active"]:
+                signal = "Early Buy Exhaustion"
+
+            elif d["td9_sell_status"] in ["Fresh","Active"]:
+                signal = "Early Sell Exhaustion"
+
+            # ----- INTRADAY EXHAUSTION -----
+            elif h["td9_buy_status"] in ["Fresh","Active"]:
+                signal = "Intraday Buy Exhaustion"
+
+            elif h["td9_sell_status"] in ["Fresh","Active"]:
+                signal = "Intraday Sell Exhaustion"
+
+            # ================= CONFIDENCE SCORING ================= #
+
+            if d["td13_buy_status"] in ["Fresh","Active"]:
+                confidence += 2
+
+            if h["td13_buy_status"] in ["Fresh","Active"]:
                 confidence += 1
 
             if ratio_strong:
                 confidence += 1
 
-            if last_hour["buy_age"] <= 3:
+            if h["td13_buy_age"] <= 3:
                 confidence += 1
 
-            # ================= FINAL FILTER ================= #
+            confidence = min(confidence, 6)
+
+            # ================= FILTER ================= #
 
             if confidence >= 4 and signal:
 
                 leadership = "Leader" if ratio_strong else "Lagging"
 
                 results.append(
-                    f"{symbol:<12} | {signal:<25} | Score {confidence}/6 | {leadership}"
+                    f"{symbol:<12} | {bias:<4} | "
+                    f"D:{d['td13_buy_status'] or d['td13_sell_status']:<8} | "
+                    f"H:{h['td13_buy_status'] or h['td13_sell_status']:<8} | "
+                    f"{signal:<22} | {confidence}/6 | {leadership}"
                 )
 
         except:
@@ -231,8 +237,9 @@ def run():
         return
 
     message = (
-        "📊 TD Framework v1.1 Signals\n"
-        f"Scanned: {total_scanned}\n\n"
+        "📊 Signals\n"
+        "Stock        |Bias |Daily     |1H        |Signal                |Score|Type\n"
+        "--------------------------------------------------------------------------\n"
         + "\n".join(results[:40])
     )
 
