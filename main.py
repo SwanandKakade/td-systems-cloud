@@ -4,16 +4,16 @@ import pandas as pd
 import zipfile
 import io
 import logging
-import numpy as np
 from datetime import datetime, timedelta
 from demark_engine import DeMarkEngine
 
-# ---------------- SAFE TQDM ---------------- #
+# Safe tqdm (Railway safe)
 try:
     from tqdm import tqdm
 except:
     def tqdm(x, **kwargs):
         return x
+
 
 # ---------------- CONFIG ---------------- #
 
@@ -25,16 +25,19 @@ MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+
 # ---------------- TELEGRAM ---------------- #
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
+
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": message})
     except:
         pass
+
 
 # ---------------- MASTER FILE ---------------- #
 
@@ -63,7 +66,8 @@ def load_master_file():
         logging.info(f"Master load failed: {e}")
         return None
 
-# ---------------- HISTORY FUNCTIONS ---------------- #
+
+# ---------------- HISTORY ---------------- #
 
 def fetch_daily(token):
     try:
@@ -118,16 +122,6 @@ def fetch_1h(token):
     except:
         return None
 
-# ---------------- SIGNAL AGE CLASSIFIER ---------------- #
-
-def classify_age(age):
-    if age is None:
-        return "Neutral"
-    if age <= 3:
-        return "Fresh"
-    if age <= 8:
-        return "Active"
-    return "Expired"
 
 # ---------------- RUN ---------------- #
 
@@ -140,122 +134,119 @@ def run():
         logging.error("Master unavailable.")
         return
 
-    table_rows = []
+    rows = []
     total_scanned = 0
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
         token = row["TOKEN"]
         symbol = row["SYMBOL"]
-
         total_scanned += 1
 
         try:
-            # =======================
-            # DAILY TIMEFRAME
-            # =======================
+
+            # ---------------- DAILY ---------------- #
+
             df_daily = fetch_daily(token)
-            if df_daily is None or len(df_daily) < 200:
+            if df_daily is None or len(df_daily) < 100:
                 continue
 
             if df_daily["VOLUME"].tail(20).mean() < 100000:
                 continue
 
-            # 200 EMA
+            # 200 EMA Filter
             df_daily["EMA200"] = df_daily["CLOSE"].ewm(span=200).mean()
-            last_daily_close = df_daily["CLOSE"].iloc[-1]
-            last_ema200 = df_daily["EMA200"].iloc[-1]
+            trend_up = df_daily.iloc[-1]["CLOSE"] > df_daily.iloc[-1]["EMA200"]
 
-            daily_trend_bull = last_daily_close > last_ema200
-            daily_trend_bear = last_daily_close < last_ema200
+            engine_daily = DeMarkEngine(df_daily)
+            daily = engine_daily.run()
 
-            # =======================
-            # 1H TIMEFRAME
-            # =======================
+            recent_daily = daily.tail(12)
+
+            # ---------------- 1H ---------------- #
+
             df_1h = fetch_1h(token)
-            if df_1h is None or len(df_1h) < 50:
+            if df_1h is None or len(df_1h) < 100:
                 continue
 
             engine_1h = DeMarkEngine(df_1h)
             h1 = engine_1h.run()
-            last_1h = h1.iloc[-1]
 
-            # =======================
-            # CONFIDENCE SCORING
-            # =======================
-            confidence = 0
-            final_signal = None
-            signal_age = None
+            recent_1h = h1.tail(12)
 
-            # BUY
-            if daily_trend_bull and last_1h["valid_buy_13"]:
-                final_signal = "Buy Exhaustion"
-                confidence += 3
+            # ---------------- SIGNAL DETECTION ---------------- #
 
-            if daily_trend_bull and last_1h["perfect_buy"]:
-                confidence += 1
+            def detect_signal(df_recent):
 
-            # SELL
-            if daily_trend_bear and last_1h["valid_sell_13"]:
-                final_signal = "Sell Exhaustion"
-                confidence += 3
+                buy13 = df_recent[df_recent["td13_buy_status"].notna()]
+                sell13 = df_recent[df_recent["td13_sell_status"].notna()]
+                buy9 = df_recent[df_recent["td9_buy_status"].notna()]
+                sell9 = df_recent[df_recent["td9_sell_status"].notna()]
 
-            if daily_trend_bear and last_1h["perfect_sell"]:
-                confidence += 1
+                if not buy13.empty:
+                    return buy13.iloc[-1]["td13_buy_status"] + " Buy", 3
 
-            if final_signal is None:
+                if not sell13.empty:
+                    return sell13.iloc[-1]["td13_sell_status"] + " Sell", 3
+
+                if not buy9.empty:
+                    return buy9.iloc[-1]["td9_buy_status"], 1
+
+                if not sell9.empty:
+                    return sell9.iloc[-1]["td9_sell_status"], 1
+
+                return None, 0
+
+
+            daily_signal, daily_score = detect_signal(recent_daily)
+            h1_signal, h1_score = detect_signal(recent_1h)
+
+            if not daily_signal and not h1_signal:
                 continue
 
-            # =======================
-            # SIGNAL AGING
-            # =======================
-            if final_signal == "Buy Exhaustion":
-                valid_indices = h1.index[h1["valid_buy_13"] == True]
-            else:
-                valid_indices = h1.index[h1["valid_sell_13"] == True]
+            # ---------------- CONFIDENCE ---------------- #
 
-            if len(valid_indices) > 0:
-                last_signal_index = valid_indices[-1]
-                age = len(h1) - h1.index.get_loc(last_signal_index) - 1
-                signal_age = classify_age(age)
-            else:
-                signal_age = "Fresh"
+            confidence = daily_score + h1_score
 
-            # =======================
-            # BUILD ROW
-            # =======================
-            table_rows.append({
-                "symbol": symbol,
-                "h1": "Yes",
-                "daily": "Bull" if daily_trend_bull else "Bear",
-                "signal": final_signal,
-                "status": signal_age,
-                "confidence": confidence
+            if trend_up:
+                confidence += 1
+
+            # ---------------- FINAL SIGNAL LABEL ---------------- #
+
+            final_signal = daily_signal if daily_signal else h1_signal
+
+            rows.append({
+                "Stock": symbol,
+                "1H": h1_signal if h1_signal else "-",
+                "Daily": daily_signal if daily_signal else "-",
+                "Signal": final_signal,
+                "Conf": confidence
             })
 
         except Exception as e:
             logging.warning(f"Error processing {symbol}: {e}")
             continue
 
-    # =======================
-    # TELEGRAM OUTPUT
-    # =======================
+    # ---------------- TELEGRAM OUTPUT ---------------- #
 
-    logging.info(f"Scan Completed. Symbols scanned: {total_scanned}")
+    logging.info(f"Scanned: {total_scanned}")
+    logging.info(f"Signals Found: {len(rows)}")
 
-    if not table_rows:
-        logging.info("No aligned institutional signals.")
+    if not rows:
+        logging.info("No signals detected.")
         return
 
-    message = "📊 TD Institutional Scanner\n\n"
-    message += "Symbol | 1H | Daily | Signal | Status | Conf\n"
-    message += "------------------------------------------------\n"
+    rows = sorted(rows, key=lambda x: x["Conf"], reverse=True)
 
-    for row in table_rows[:25]:
-        message += f"{row['symbol']} | {row['h1']} | {row['daily']} | {row['signal']} | {row['status']} | {row['confidence']}\n"
+    message = "📊 TD Institutional Signals\n"
+    message += f"Scanned: {total_scanned}\n\n"
+    message += "Stock | 1H | Daily | Signal | Conf\n"
+    message += "-" * 45 + "\n"
+
+    for r in rows[:25]:
+        message += f"{r['Stock']} | {r['1H']} | {r['Daily']} | {r['Signal']} | {r['Conf']}\n"
 
     send_telegram(message)
-    logging.info("Telegram alert sent.")
 
 
 if __name__ == "__main__":
