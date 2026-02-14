@@ -7,14 +7,14 @@ import logging
 from datetime import datetime, timedelta
 from demark_engine import DeMarkEngine
 
-# Safe tqdm
 try:
     from tqdm import tqdm
 except:
     def tqdm(x, **kwargs):
         return x
 
-# ---------------- CONFIG ---------------- #
+
+# ================= CONFIG ================= #
 
 DEFINEDGE_SESSION = os.getenv("DEFINEDGE_SESSION_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -22,9 +22,13 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 
+# ⚠️ Put correct NIFTY token here
+NIFTY_TOKEN = "26000"  # <-- Replace with correct token from master file
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-# ---------------- TELEGRAM ---------------- #
+
+# ================= TELEGRAM ================= #
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -35,7 +39,8 @@ def send_telegram(message):
     except:
         pass
 
-# ---------------- MASTER FILE ---------------- #
+
+# ================= MASTER ================= #
 
 def load_master_file():
     try:
@@ -44,8 +49,7 @@ def load_master_file():
             return None
 
         z = zipfile.ZipFile(io.BytesIO(response.content))
-        csv_file = z.namelist()[0]
-        df = pd.read_csv(z.open(csv_file))
+        df = pd.read_csv(z.open(z.namelist()[0]))
 
         df.columns = [
             "EXCHANGE","TOKEN","SYMBOL","TRADINGSYM",
@@ -54,20 +58,22 @@ def load_master_file():
             "ISIN","PRICEMULT","COMPANY"
         ]
 
-        df = df[df["INSTRUMENTTYPE"] == "EQ"]
-        return df
+        return df[df["INSTRUMENTTYPE"] == "EQ"]
 
     except:
         return None
 
-# ---------------- DATA FETCH ---------------- #
 
-def fetch_daily(token):
+# ================= HISTORY ================= #
+
+def fetch_data(token, timeframe, days):
+
     try:
         end = datetime.now()
-        start = end - timedelta(days=180)
+        start = end - timedelta(days=days)
 
-        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/day/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/{timeframe}/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
+
         headers = {"Authorization": DEFINEDGE_SESSION}
 
         r = requests.get(url, headers=headers)
@@ -75,177 +81,158 @@ def fetch_daily(token):
             return None
 
         df = pd.read_csv(io.StringIO(r.text))
+
         if df.empty:
             return None
 
         df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
         df["DATETIME"] = pd.to_datetime(df["DATETIME"])
         df = df.sort_values("DATETIME")
+
         return df
 
     except:
         return None
 
 
-def fetch_1h(token):
-    try:
-        end = datetime.now()
-        start = end - timedelta(days=60)
-
-        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/60/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
-        headers = {"Authorization": DEFINEDGE_SESSION}
-
-        r = requests.get(url, headers=headers)
-        if r.status_code != 200:
-            return None
-
-        df = pd.read_csv(io.StringIO(r.text))
-        if df.empty:
-            return None
-
-        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
-        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
-        df = df.sort_values("DATETIME")
-        return df
-
-    except:
-        return None
-
-# ---------------- RUN ENGINE ---------------- #
+# ================= RUN ================= #
 
 def run():
 
-    logging.info("Starting TD Framework v1.0 Scanner...")
+    logging.info("Starting TD Framework v1.1 Scanner...")
 
     master = load_master_file()
     if master is None:
-        logging.info("Master unavailable.")
+        logging.error("Master unavailable.")
         return
 
+    # Fetch Nifty once
+    nifty_df = fetch_data(NIFTY_TOKEN, "day", 200)
+    if nifty_df is None or len(nifty_df) < 100:
+        logging.error("Nifty data unavailable.")
+        return
+
+    nifty_df = nifty_df.set_index("DATETIME")
+
     results = []
-    total = 0
+    total_scanned = 0
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
         token = row["TOKEN"]
         symbol = row["SYMBOL"]
-        total += 1
+        total_scanned += 1
 
         try:
-            # ======================
-            # DAILY ENGINE
-            # ======================
 
-            df_daily = fetch_daily(token)
-            if df_daily is None or len(df_daily) < 50:
+            # ================= DAILY ================= #
+
+            daily_df = fetch_data(token, "day", 200)
+            if daily_df is None or len(daily_df) < 100:
                 continue
 
-            if df_daily["VOLUME"].tail(20).mean() < 100000:
-                continue
+            daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200).mean()
 
-            engine_daily = DeMarkEngine(df_daily)
+            daily_df = daily_df.set_index("DATETIME")
+
+            # Ratio strength
+            merged = daily_df.join(
+                nifty_df["CLOSE"],
+                how="inner",
+                rsuffix="_NIFTY"
+            )
+
+            merged["RATIO"] = merged["CLOSE"] / merged["CLOSE_NIFTY"]
+            merged["RATIO_EMA"] = merged["RATIO"].ewm(span=20).mean()
+
+            ratio_strong = (
+                merged["RATIO"].iloc[-1] >
+                merged["RATIO_EMA"].iloc[-1]
+            )
+
+            # Run TD Engine
+            engine_daily = DeMarkEngine(daily_df.reset_index())
             daily = engine_daily.run()
-            d_last = daily.iloc[-1]
+            last_daily = daily.iloc[-1]
 
-            # 200 EMA Bias
-            bias = d_last["BIAS"]  # Bullish / Bearish
+            # ================= 1H ================= #
 
-            # ======================
-            # 1H ENGINE
-            # ======================
-
-            df_1h = fetch_1h(token)
-            if df_1h is None or len(df_1h) < 50:
+            hourly_df = fetch_data(token, "60", 30)
+            if hourly_df is None or len(hourly_df) < 50:
                 continue
 
-            engine_1h = DeMarkEngine(df_1h)
-            h1 = engine_1h.run()
-            h_last = h1.iloc[-1]
+            engine_hour = DeMarkEngine(hourly_df)
+            hourly = engine_hour.run()
+            last_hour = hourly.iloc[-1]
 
-            # ======================
-            # CLASSIFICATION LOGIC
-            # ======================
+            # ================= CLASSIFICATION ================= #
 
-            classification = ""
+            signal = None
             confidence = 0
 
-            # Daily TD13
-            if d_last["BUY_STATUS"] in ["Fresh", "Active"]:
+            bullish_bias = last_daily["close"] > daily_df["EMA200"].iloc[-1]
+
+            # Fresh Buy
+            if bullish_bias and last_hour["valid_buy_13"]:
+                signal = "Fresh Buy"
                 confidence += 2
-            if d_last["SELL_STATUS"] in ["Fresh", "Active"]:
+
+            # Strong Sell
+            if last_daily["valid_sell_13"] and last_hour["valid_sell_13"]:
+                signal = "Strong Sell"
                 confidence += 2
 
-            # 1H TD13
-            if h_last["BUY_STATUS"] in ["Fresh", "Active"]:
+            # Early Exhaustion
+            if last_daily["td9_buy"]:
+                signal = "Early Buy Exhaustion"
+
+            if last_daily["td9_sell"]:
+                signal = "Early Sell Exhaustion"
+
+            # Intraday Exhaustion
+            if last_hour["td9_buy"]:
+                signal = "Intraday Buy Exhaustion"
+
+            if last_hour["td9_sell"]:
+                signal = "Intraday Sell Exhaustion"
+
+            # ================= CONFIDENCE ================= #
+
+            if last_daily["valid_buy_13"]:
+                confidence += 2
+
+            if last_hour["valid_buy_13"]:
                 confidence += 1
-            if h_last["SELL_STATUS"] in ["Fresh", "Active"]:
+
+            if ratio_strong:
                 confidence += 1
 
-            # Perfect setups
-            if d_last["PERFECT_BUY"]:
-                confidence += 1
-            if d_last["PERFECT_SELL"]:
+            if last_hour["buy_age"] <= 3:
                 confidence += 1
 
-            # Trend alignment
-            if bias == "Bullish" and h_last["BUY_STATUS"] in ["Fresh","Active"]:
-                confidence += 1
-            if bias == "Bearish" and h_last["SELL_STATUS"] in ["Fresh","Active"]:
-                confidence += 1
+            # ================= FINAL FILTER ================= #
 
-            # Classification rules
+            if confidence >= 4 and signal:
 
-            if bias == "Bullish" and h_last["BUY_STATUS"] in ["Fresh","Active"]:
-                classification = "Fresh Buy"
+                leadership = "Leader" if ratio_strong else "Lagging"
 
-            if bias == "Bearish" and h_last["SELL_STATUS"] in ["Fresh","Active"]:
-                classification = "Fresh Sell"
-
-            if d_last["BUY_STATUS"] in ["Fresh","Active"] and \
-               h_last["BUY_STATUS"] in ["Fresh","Active"]:
-                classification = "Strong Buy"
-
-            if d_last["SELL_STATUS"] in ["Fresh","Active"] and \
-               h_last["SELL_STATUS"] in ["Fresh","Active"]:
-                classification = "Strong Sell"
-
-            if d_last["PERFECT_BUY"] and classification == "":
-                classification = "Early Exhaustion"
-
-            if d_last["PERFECT_SELL"] and classification == "":
-                classification = "Early Exhaustion"
-
-            if h_last["PERFECT_BUY"] and classification == "":
-                classification = "Intraday Exhaustion"
-
-            if h_last["PERFECT_SELL"] and classification == "":
-                classification = "Intraday Exhaustion"
-
-            if classification == "":
-                continue
-
-            if confidence < 4:
-                continue
-
-            results.append(
-                f"{symbol:<12} | 1H: {h_last['BUY_STATUS']}/{h_last['SELL_STATUS']} "
-                f"| Daily: {d_last['BUY_STATUS']}/{d_last['SELL_STATUS']} "
-                f"| {classification} | Score: {confidence}"
-            )
+                results.append(
+                    f"{symbol:<12} | {signal:<25} | Score {confidence}/6 | {leadership}"
+                )
 
         except:
             continue
 
-    logging.info(f"Scan Completed. Scanned: {total}")
-    logging.info(f"Signals Found: {len(results)}")
+    logging.info(f"Scanned: {total_scanned}")
+    logging.info(f"Signals: {len(results)}")
 
     if not results:
-        logging.info("No actionable signals.")
+        logging.info("No high-confidence signals.")
         return
 
     message = (
-        "📊 TD Framework v1.0 Signals\n"
-        f"Scanned: {total}\n\n"
+        "📊 TD Framework v1.1 Signals\n"
+        f"Scanned: {total_scanned}\n\n"
         + "\n".join(results[:40])
     )
 
