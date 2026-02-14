@@ -60,6 +60,7 @@ def fetch_data(token, timeframe, days):
         headers = {
                     "Authorization": DEFINEDGE_SESSION.strip()
                 }
+        print("Session:", DEFINEDGE_SESSION)
 
         r = requests.get(url, headers=headers, timeout=10)
 
