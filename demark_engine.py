@@ -4,22 +4,16 @@ import numpy as np
 
 class DeMarkEngine:
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df):
         self.df = df.copy()
-
-        # Standardize column names
         self.df.columns = [c.lower() for c in self.df.columns]
 
-        required = ["open", "high", "low", "close", "volume"]
-        for col in required:
-            if col not in self.df.columns:
-                raise ValueError(f"Missing required column: {col}")
-
-    # =====================================================
-    # 1️⃣ DeMarker (Aligned with Pine)
-    # =====================================================
+    # ============================
+    # DEMARKER
+    # ============================
 
     def compute_demarker(self, length=14):
+
         up = np.maximum(self.df["high"] - self.df["high"].shift(1), 0)
         down = np.maximum(self.df["low"].shift(1) - self.df["low"], 0)
 
@@ -28,183 +22,117 @@ class DeMarkEngine:
 
         self.df["dem"] = dem_up / (dem_up + dem_down)
 
-    # =====================================================
-    # 2️⃣ TD Setup
-    # =====================================================
+    # ============================
+    # TD SETUPS
+    # ============================
 
     def compute_setups(self):
-    
+
         self.df["buy_setup"] = 0
         self.df["sell_setup"] = 0
-    
-        buy = 0
-        sell = 0
-    
-        for i in range(4, len(self.df)):
-    
-            close_now = self.df["close"].iloc[i]
-            close_4 = self.df["close"].iloc[i - 4]
-    
-            if close_now < close_4:
-                buy += 1
-                sell = 0
-    
-            elif close_now > close_4:
-                sell += 1
-                buy = 0
-    
-            else:
-                buy = 0
-                sell = 0
-    
-            self.df.at[self.df.index[i], "buy_setup"] = buy
-            self.df.at[self.df.index[i], "sell_setup"] = sell
-    
-        # ===============================
-        # PERFECTED SETUP (TRUE PINE STYLE)
-        # ===============================
-    
-        self.df["perfect_buy"] = False
-        self.df["perfect_sell"] = False
-    
-        for i in range(len(self.df)):
-    
-            if self.df["buy_setup"].iloc[i] == 9:
-                # Bar 9 index = i
-                # Bar 6 index = i - 3
-                # Bar 7 index = i - 2
-                # Bar 8 index = i - 1
-    
-                if i >= 8:
-                    if (
-                        self.df["high"].iloc[i - 1] >
-                        max(self.df["high"].iloc[i - 3],
-                            self.df["high"].iloc[i - 2])
-                    ):
-                        self.df.at[self.df.index[i], "perfect_buy"] = True
-    
-            if self.df["sell_setup"].iloc[i] == 9:
-    
-                if i >= 8:
-                    if (
-                        self.df["low"].iloc[i - 1] <
-                        min(self.df["low"].iloc[i - 3],
-                            self.df["low"].iloc[i - 2])
-                    ):
-                        self.df.at[self.df.index[i], "perfect_sell"] = True
 
-    # =====================================================
-    # 3️⃣ Countdown with Cancellation + Recycling
-    # =====================================================
+        for i in range(4, len(self.df)):
+
+            if self.df["close"].iloc[i] < self.df["close"].iloc[i - 4]:
+                self.df.at[self.df.index[i], "buy_setup"] = \
+                    self.df["buy_setup"].iloc[i - 1] + 1
+            else:
+                self.df.at[self.df.index[i], "buy_setup"] = 0
+
+            if self.df["close"].iloc[i] > self.df["close"].iloc[i - 4]:
+                self.df.at[self.df.index[i], "sell_setup"] = \
+                    self.df["sell_setup"].iloc[i - 1] + 1
+            else:
+                self.df.at[self.df.index[i], "sell_setup"] = 0
+
+        # Perfected Setup
+        self.df["perfect_buy"] = (
+            (self.df["buy_setup"] == 9) &
+            (
+                (self.df["high"].shift(8) > self.df["high"].shift(6)) |
+                (self.df["high"].shift(8) > self.df["high"].shift(7))
+            )
+        )
+
+        self.df["perfect_sell"] = (
+            (self.df["sell_setup"] == 9) &
+            (
+                (self.df["low"].shift(8) < self.df["low"].shift(6)) |
+                (self.df["low"].shift(8) < self.df["low"].shift(7))
+            )
+        )
+
+    # ============================
+    # TD COUNTDOWN (PINE-ACCURATE)
+    # ============================
 
     def compute_countdown(self):
+
         self.df["buy_cd"] = 0
         self.df["sell_cd"] = 0
 
+        buy_cd = 0
+        sell_cd = 0
+
         for i in range(2, len(self.df)):
 
-            # Cancellation
+            # Cancellation rule
             if self.df["sell_setup"].iloc[i] >= 1:
-                buy_prev = 0
-            else:
-                buy_prev = self.df["buy_cd"].iloc[i - 1]
+                buy_cd = 0
 
             if self.df["buy_setup"].iloc[i] >= 1:
-                sell_prev = 0
-            else:
-                sell_prev = self.df["sell_cd"].iloc[i - 1]
+                sell_cd = 0
 
-            # Countdown conditions
-            if self.df["close"].iloc[i] < self.df["close"].iloc[i - 2]:
-                self.df.at[self.df.index[i], "buy_cd"] = buy_prev + 1
-            else:
-                self.df.at[self.df.index[i], "buy_cd"] = buy_prev
+            # Buy countdown condition
+            if self.df["close"].iloc[i] <= self.df["low"].iloc[i - 2]:
+                buy_cd += 1
 
-            if self.df["close"].iloc[i] > self.df["close"].iloc[i - 2]:
-                self.df.at[self.df.index[i], "sell_cd"] = sell_prev + 1
-            else:
-                self.df.at[self.df.index[i], "sell_cd"] = sell_prev
+            # Sell countdown condition
+            if self.df["close"].iloc[i] >= self.df["high"].iloc[i - 2]:
+                sell_cd += 1
 
-            # Recycling
-            if self.df["buy_setup"].iloc[i] >= 9 and self.df["buy_cd"].iloc[i] < 13:
-                self.df.at[self.df.index[i], "buy_cd"] = 0
+            # Cap at 13
+            buy_cd = min(buy_cd, 13)
+            sell_cd = min(sell_cd, 13)
 
-            if self.df["sell_setup"].iloc[i] >= 9 and self.df["sell_cd"].iloc[i] < 13:
-                self.df.at[self.df.index[i], "sell_cd"] = 0
+            self.df.at[self.df.index[i], "buy_cd"] = buy_cd
+            self.df.at[self.df.index[i], "sell_cd"] = sell_cd
 
-    # =====================================================
-    # 4️⃣ TD13 Validation (Volume + DeMarker + Deferral)
-    # =====================================================
+    # ============================
+    # TD13 VALIDATION
+    # ============================
 
     def validate_td13(self):
+
         self.df["vol_sma"] = self.df["volume"].rolling(20).mean()
         self.df["vol_drop"] = self.df["volume"] < self.df["vol_sma"]
 
         self.df["valid_buy_13"] = (
-            (self.df["buy_cd"] >= 13) &
+            (self.df["buy_cd"] == 13) &
             (self.df["dem"] < 0.3) &
             (self.df["vol_drop"]) &
             (self.df["low"] <= self.df["close"].shift(8))
         )
 
         self.df["valid_sell_13"] = (
-            (self.df["sell_cd"] >= 13) &
+            (self.df["sell_cd"] == 13) &
             (self.df["dem"] > 0.7) &
             (self.df["vol_drop"]) &
             (self.df["high"] >= self.df["close"].shift(8))
         )
 
-    # =====================================================
-    # 5️⃣ Signal Aging
-    # =====================================================
-
-    def compute_signal_age(self):
-        self.df["buy_signal_bar"] = np.where(self.df["valid_buy_13"], np.arange(len(self.df)), np.nan)
-        self.df["sell_signal_bar"] = np.where(self.df["valid_sell_13"], np.arange(len(self.df)), np.nan)
-
-        self.df["buy_signal_bar"] = self.df["buy_signal_bar"].ffill()
-        self.df["sell_signal_bar"] = self.df["sell_signal_bar"].ffill()
-
-        self.df["buy_age"] = np.arange(len(self.df)) - self.df["buy_signal_bar"]
-        self.df["sell_age"] = np.arange(len(self.df)) - self.df["sell_signal_bar"]
-
-        def classify(age):
-            if np.isnan(age):
-                return "Neutral"
-            if age <= 4:
-                return "Fresh"
-            if age <= 12:
-                return "Fading"
-            return "Expired"
-
-        self.df["buy_status"] = self.df["buy_age"].apply(classify)
-        self.df["sell_status"] = self.df["sell_age"].apply(classify)
-
-    # =====================================================
-    # 6️⃣ Alignment Score
-    # =====================================================
-
-    def compute_alignment_score(self):
-        self.df["alignment_score"] = (
-            self.df["perfect_buy"].astype(int) +
-            self.df["perfect_sell"].astype(int) +
-            self.df["valid_buy_13"].astype(int) * 2 +
-            self.df["valid_sell_13"].astype(int) * 2
-        )
-
-    # =====================================================
-    # RUN ENGINE
-    # =====================================================
+    # ============================
+    # RUN
+    # ============================
 
     def run(self):
+
         self.compute_demarker()
         self.compute_setups()
         self.compute_countdown()
         self.validate_td13()
-        self.compute_signal_age()
-        self.compute_alignment_score()
 
-        # Standard naming for scanner
+        # Standard naming
         self.df["bull_setup"] = self.df["buy_setup"]
         self.df["bear_setup"] = self.df["sell_setup"]
         self.df["bull_countdown"] = self.df["buy_cd"]
