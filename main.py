@@ -72,7 +72,7 @@ def fetch_data(token, timeframe, days):
         end = datetime.now()
         start = end - timedelta(days=days)
 
-        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/{timeframe}/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359}"
+        url = f"https://data.definedgesecurities.com/sds/history/NSE/{token}/{timeframe}/{start.strftime('%d%m%Y')}0000/{end.strftime('%d%m%Y')}2359"
 
         headers = {"Authorization": DEFINEDGE_SESSION}
 
