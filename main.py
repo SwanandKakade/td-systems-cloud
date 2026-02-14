@@ -56,7 +56,7 @@ def fetch_data(token, timeframe, days):
             f"{start.strftime('%d%m%Y')}0000/"
             f"{end.strftime('%d%m%Y')}2359"
         )
-
+        logging.warning(f"URL: {url}")
         headers = {"Authorization": DEFINEDGE_SESSION}
 
         r = requests.get(url, headers=headers, timeout=100)
