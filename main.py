@@ -22,7 +22,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 MASTER_URL = "https://app.definedgesecurities.com/public/nsecash.zip"
 
-# ⚠️ Replace with correct NIFTY token from master file
+# ⚠️ Replace with correct NIFTY token
 NIFTY_TOKEN = "26000"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -36,8 +36,8 @@ def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-    except:
-        pass
+    except Exception as e:
+        logging.warning(f"Telegram error: {e}")
 
 
 # ================= MASTER ================= #
@@ -60,13 +60,15 @@ def load_master_file():
 
         return df[df["INSTRUMENTTYPE"] == "EQ"]
 
-    except:
+    except Exception as e:
+        logging.error(f"Master load failed: {e}")
         return None
 
 
 # ================= DATA FETCH ================= #
 
 def fetch_data(token, timeframe, days):
+
     try:
         end = datetime.now()
         start = end - timedelta(days=days)
@@ -94,7 +96,8 @@ def fetch_data(token, timeframe, days):
 
         return df
 
-    except:
+    except Exception as e:
+        logging.warning(f"Fetch error {token}: {e}")
         return None
 
 
@@ -102,7 +105,7 @@ def fetch_data(token, timeframe, days):
 
 def run():
 
-    logging.info("Starting TD Framework v2.0 Dashboard Scanner...")
+    logging.info("Starting TD Framework v2.1 Dashboard Scanner...")
 
     master = load_master_file()
     if master is None:
@@ -154,7 +157,7 @@ def run():
             hourly = engine_hour.run()
             last_hour = hourly.iloc[-1]
 
-            # ================= RATIO ================= #
+            # ================= RATIO STRENGTH ================= #
 
             merged = daily_df.join(
                 nifty_df["CLOSE"],
@@ -168,70 +171,87 @@ def run():
             ratio_strong = merged["RATIO"].iloc[-1] > merged["RATIO_EMA"].iloc[-1]
             leadership = "Leader" if ratio_strong else "Lagging"
 
-            # ================= SIGNAL STATES ================= #
+            # ================= DAILY STATE ================= #
 
             daily_state = "None"
-            if last_daily["valid_buy_13"]:
-                daily_state = f"TD13 Buy ({last_daily['buy_status']})"
-            elif last_daily["valid_sell_13"]:
-                daily_state = f"TD13 Sell ({last_daily['sell_status']})"
-            elif last_daily["td9_buy"]:
-                daily_state = "TD9 Buy"
-            elif last_daily["td9_sell"]:
-                daily_state = "TD9 Sell"
+
+            if last_daily["td13_buy_status"] in ["Fresh", "Active"]:
+                daily_state = f"TD13 Buy ({last_daily['td13_buy_status']})"
+
+            elif last_daily["td13_sell_status"] in ["Fresh", "Active"]:
+                daily_state = f"TD13 Sell ({last_daily['td13_sell_status']})"
+
+            elif last_daily["td9_buy_status"] in ["Fresh", "Active"]:
+                daily_state = f"TD9 Buy ({last_daily['td9_buy_status']})"
+
+            elif last_daily["td9_sell_status"] in ["Fresh", "Active"]:
+                daily_state = f"TD9 Sell ({last_daily['td9_sell_status']})"
+
+            # ================= HOURLY STATE ================= #
 
             hour_state = "None"
-            if last_hour["valid_buy_13"]:
-                hour_state = f"TD13 Buy ({last_hour['buy_status']})"
-            elif last_hour["valid_sell_13"]:
-                hour_state = f"TD13 Sell ({last_hour['sell_status']})"
-            elif last_hour["td9_buy"]:
-                hour_state = "TD9 Buy"
-            elif last_hour["td9_sell"]:
-                hour_state = "TD9 Sell"
+
+            if last_hour["td13_buy_status"] in ["Fresh", "Active"]:
+                hour_state = f"TD13 Buy ({last_hour['td13_buy_status']})"
+
+            elif last_hour["td13_sell_status"] in ["Fresh", "Active"]:
+                hour_state = f"TD13 Sell ({last_hour['td13_sell_status']})"
+
+            elif last_hour["td9_buy_status"] in ["Fresh", "Active"]:
+                hour_state = f"TD9 Buy ({last_hour['td9_buy_status']})"
+
+            elif last_hour["td9_sell_status"] in ["Fresh", "Active"]:
+                hour_state = f"TD9 Sell ({last_hour['td9_sell_status']})"
 
             # ================= CONFIDENCE ================= #
 
             confidence = 0
 
-            if last_daily["valid_buy_13"] or last_daily["valid_sell_13"]:
+            # Daily TD13
+            if last_daily["td13_buy_status"] in ["Fresh", "Active"] or \
+               last_daily["td13_sell_status"] in ["Fresh", "Active"]:
                 confidence += 2
 
-            if last_hour["valid_buy_13"] or last_hour["valid_sell_13"]:
+            # Hourly TD13
+            if last_hour["td13_buy_status"] in ["Fresh", "Active"] or \
+               last_hour["td13_sell_status"] in ["Fresh", "Active"]:
                 confidence += 1
 
+            # Ratio strength
             if ratio_strong:
                 confidence += 1
 
-            if (
-                last_hour["buy_age"] <= 3 or
-                last_hour["sell_age"] <= 3
-            ):
+            # Fresh hourly signal boost
+            if last_hour["td13_buy_age"] <= 3 or \
+               last_hour["td13_sell_age"] <= 3:
                 confidence += 1
 
-            if bullish_bias and last_hour["valid_buy_13"]:
+            # Bias alignment
+            if bullish_bias and last_hour["td13_buy_status"] in ["Fresh", "Active"]:
                 confidence += 1
 
-            # ================= FINAL CLASSIFICATION ================= #
+            # ================= CLASSIFICATION ================= #
 
             classification = "Neutral"
 
-            if last_daily["valid_sell_13"] and last_hour["valid_sell_13"]:
+            if last_daily["td13_sell_status"] in ["Fresh", "Active"] and \
+               last_hour["td13_sell_status"] in ["Fresh", "Active"]:
                 classification = "Strong Sell"
 
-            elif bullish_bias and last_hour["valid_buy_13"]:
+            elif bullish_bias and \
+                 last_hour["td13_buy_status"] in ["Fresh", "Active"]:
                 classification = "Fresh Buy"
 
-            elif last_daily["td9_buy"]:
+            elif last_daily["td9_buy_status"] in ["Fresh", "Active"]:
                 classification = "Early Buy Exhaustion"
 
-            elif last_daily["td9_sell"]:
+            elif last_daily["td9_sell_status"] in ["Fresh", "Active"]:
                 classification = "Early Sell Exhaustion"
 
-            elif last_hour["td9_buy"]:
+            elif last_hour["td9_buy_status"] in ["Fresh", "Active"]:
                 classification = "Intraday Buy Exhaustion"
 
-            elif last_hour["td9_sell"]:
+            elif last_hour["td9_sell_status"] in ["Fresh", "Active"]:
                 classification = "Intraday Sell Exhaustion"
 
             # ================= APPEND ================= #
@@ -246,7 +266,8 @@ def run():
                 "classification": classification
             })
 
-        except:
+        except Exception as e:
+            logging.warning(f"{symbol} error: {e}")
             continue
 
     # ================= OUTPUT ================= #
@@ -255,10 +276,9 @@ def run():
     logging.info(f"Total Instruments: {len(results)}")
 
     if not results:
-        logging.info("No data.")
+        logging.info("No instruments processed.")
         return
 
-    # Sort by confidence
     results = sorted(results, key=lambda x: x["confidence"], reverse=True)
 
     lines = []
@@ -268,14 +288,14 @@ def run():
             f"{r['symbol']:<12} | "
             f"{r['classification']:<22} | "
             f"Bias: {r['bias']:<7} | "
-            f"D: {r['daily']:<18} | "
-            f"H: {r['hour']:<18} | "
+            f"D: {r['daily']:<20} | "
+            f"H: {r['hour']:<20} | "
             f"{r['leadership']:<8} | "
             f"{r['confidence']}/6"
         )
 
     message = (
-        "📊 Dashboard\n"
+        "📊 TD Framework v2.1 Dashboard\n"
         f"Scanned: {total_scanned}\n\n"
         + "\n".join(lines)
     )
