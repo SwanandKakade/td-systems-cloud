@@ -4,153 +4,190 @@ import numpy as np
 
 class DeMarkEngine:
 
-    def __init__(self, df):
+    def __init__(self, df: pd.DataFrame):
+        """
+        Expected columns:
+        DATETIME, OPEN, HIGH, LOW, CLOSE, VOLUME
+        """
+
         self.df = df.copy()
-        self.df.columns = [c.lower() for c in self.df.columns]
-        self.df = self.df.reset_index(drop=True)
+        self.df.columns = [c.upper() for c in self.df.columns]
 
-    # -----------------------------------------------------
-    # 1️⃣ DeMarker
-    # -----------------------------------------------------
-    def compute_demarker(self, length=14):
+        # Ensure sorted
+        if "DATETIME" in self.df.columns:
+            self.df = self.df.sort_values("DATETIME").reset_index(drop=True)
 
-        up = np.maximum(self.df["high"] - self.df["high"].shift(1), 0)
-        down = np.maximum(self.df["low"].shift(1) - self.df["low"], 0)
+    # =====================================================
+    # 1️⃣ DEMARKER
+    # =====================================================
+
+    def compute_demarker(self, length: int = 14):
+
+        up = np.maximum(self.df["HIGH"] - self.df["HIGH"].shift(1), 0)
+        down = np.maximum(self.df["LOW"].shift(1) - self.df["LOW"], 0)
 
         dem_up = up.rolling(length).mean()
         dem_down = down.rolling(length).mean()
 
-        self.df["dem"] = dem_up / (dem_up + dem_down)
+        self.df["DEMARKER"] = dem_up / (dem_up + dem_down)
 
-    # -----------------------------------------------------
-    # 2️⃣ TD SETUP (TD9)
-    # -----------------------------------------------------
+    # =====================================================
+    # 2️⃣ TD SETUP (9)
+    # =====================================================
+
     def compute_setups(self):
 
-        self.df["buy_setup"] = 0
-        self.df["sell_setup"] = 0
+        self.df["BULL_SETUP"] = 0
+        self.df["BEAR_SETUP"] = 0
 
         for i in range(4, len(self.df)):
 
-            if self.df["close"].iloc[i] < self.df["close"].iloc[i - 4]:
-                self.df.at[i, "buy_setup"] = self.df["buy_setup"].iloc[i - 1] + 1
+            # Buy Setup
+            if self.df["CLOSE"].iloc[i] < self.df["CLOSE"].iloc[i - 4]:
+                self.df.loc[i, "BULL_SETUP"] = self.df["BULL_SETUP"].iloc[i - 1] + 1
             else:
-                self.df.at[i, "buy_setup"] = 0
+                self.df.loc[i, "BULL_SETUP"] = 0
 
-            if self.df["close"].iloc[i] > self.df["close"].iloc[i - 4]:
-                self.df.at[i, "sell_setup"] = self.df["sell_setup"].iloc[i - 1] + 1
+            # Sell Setup
+            if self.df["CLOSE"].iloc[i] > self.df["CLOSE"].iloc[i - 4]:
+                self.df.loc[i, "BEAR_SETUP"] = self.df["BEAR_SETUP"].iloc[i - 1] + 1
             else:
-                self.df.at[i, "sell_setup"] = 0
+                self.df.loc[i, "BEAR_SETUP"] = 0
 
-        # TD9 exhaustion event
-        self.df["td9_buy"] = self.df["buy_setup"] == 9
-        self.df["td9_sell"] = self.df["sell_setup"] == 9
+        # Perfected Setup (Pine-aligned logic)
+        self.df["PERFECT_BUY"] = (
+            (self.df["BULL_SETUP"] == 9) &
+            (
+                (self.df["HIGH"].shift(8) > self.df["HIGH"].shift(6)) |
+                (self.df["HIGH"].shift(8) > self.df["HIGH"].shift(7))
+            )
+        )
 
-    # -----------------------------------------------------
-    # 3️⃣ TD COUNTDOWN (TD13)
-    # -----------------------------------------------------
+        self.df["PERFECT_SELL"] = (
+            (self.df["BEAR_SETUP"] == 9) &
+            (
+                (self.df["LOW"].shift(8) < self.df["LOW"].shift(6)) |
+                (self.df["LOW"].shift(8) < self.df["LOW"].shift(7))
+            )
+        )
+
+    # =====================================================
+    # 3️⃣ TD COUNTDOWN (13)
+    # =====================================================
+
     def compute_countdown(self):
 
-        self.df["buy_cd"] = 0
-        self.df["sell_cd"] = 0
+        self.df["BULL_CD"] = 0
+        self.df["BEAR_CD"] = 0
+
+        bull_cd = 0
+        bear_cd = 0
 
         for i in range(2, len(self.df)):
 
-            if self.df["close"].iloc[i] <= self.df["low"].iloc[i - 2]:
-                self.df.at[i, "buy_cd"] = self.df["buy_cd"].iloc[i - 1] + 1
-            else:
-                self.df.at[i, "buy_cd"] = self.df["buy_cd"].iloc[i - 1]
+            # Reset on opposite setup
+            if self.df["BULL_SETUP"].iloc[i] >= 9:
+                bull_cd = 0
+            if self.df["BEAR_SETUP"].iloc[i] >= 9:
+                bear_cd = 0
 
-            if self.df["close"].iloc[i] >= self.df["high"].iloc[i - 2]:
-                self.df.at[i, "sell_cd"] = self.df["sell_cd"].iloc[i - 1] + 1
-            else:
-                self.df.at[i, "sell_cd"] = self.df["sell_cd"].iloc[i - 1]
+            # Bullish Countdown condition (close <= low[2])
+            if self.df["CLOSE"].iloc[i] <= self.df["LOW"].iloc[i - 2]:
+                bull_cd += 1
 
-        self.df["td13_buy_raw"] = self.df["buy_cd"] >= 13
-        self.df["td13_sell_raw"] = self.df["sell_cd"] >= 13
+            # Bearish Countdown condition (close >= high[2])
+            if self.df["CLOSE"].iloc[i] >= self.df["HIGH"].iloc[i - 2]:
+                bear_cd += 1
 
-    # -----------------------------------------------------
-    # 4️⃣ TD13 VALIDATION (Dem + Volume filter)
-    # -----------------------------------------------------
+            self.df.loc[i, "BULL_CD"] = bull_cd
+            self.df.loc[i, "BEAR_CD"] = bear_cd
+
+    # =====================================================
+    # 4️⃣ TD13 VALIDATION
+    # =====================================================
+
     def validate_td13(self):
 
-        self.df["vol_sma"] = self.df["volume"].rolling(20).mean()
-        self.df["vol_drop"] = self.df["volume"] < self.df["vol_sma"]
+        # Volume filter
+        self.df["VOL_SMA"] = self.df["VOLUME"].rolling(20).mean()
+        self.df["VOL_DROP"] = self.df["VOLUME"] < self.df["VOL_SMA"]
 
-        self.df["td13_buy"] = (
-            self.df["td13_buy_raw"]
-            & (self.df["dem"] < 0.3)
-            & self.df["vol_drop"]
-            & (self.df["low"] <= self.df["close"].shift(8))
+        # Valid Buy 13
+        self.df["VALID_BUY_13"] = (
+            (self.df["BULL_CD"] >= 13) &
+            (self.df["DEMARKER"] < 0.3) &
+            (self.df["VOL_DROP"]) &
+            (self.df["LOW"] <= self.df["CLOSE"].shift(8))
         )
 
-        self.df["td13_sell"] = (
-            self.df["td13_sell_raw"]
-            & (self.df["dem"] > 0.7)
-            & self.df["vol_drop"]
-            & (self.df["high"] >= self.df["close"].shift(8))
+        # Valid Sell 13
+        self.df["VALID_SELL_13"] = (
+            (self.df["BEAR_CD"] >= 13) &
+            (self.df["DEMARKER"] > 0.7) &
+            (self.df["VOL_DROP"]) &
+            (self.df["HIGH"] >= self.df["CLOSE"].shift(8))
         )
 
-    # -----------------------------------------------------
-    # 5️⃣ SIGNAL LIFECYCLE (Age + Status)
-    # -----------------------------------------------------
-    def compute_lifecycle(self):
+    # =====================================================
+    # 5️⃣ SIGNAL AGING
+    # =====================================================
 
-        self.df["bar_index"] = np.arange(len(self.df))
+    def compute_signal_aging(self):
 
-        # Event bar tracking
-        for col in ["td9_buy", "td9_sell", "td13_buy", "td13_sell"]:
+        self.df["BUY_SIGNAL_BAR"] = np.where(self.df["VALID_BUY_13"], self.df.index, np.nan)
+        self.df["SELL_SIGNAL_BAR"] = np.where(self.df["VALID_SELL_13"], self.df.index, np.nan)
 
-            event_bar = f"{col}_bar"
-            last_event_bar = f"last_{col}_bar"
-            age_col = f"{col}_age"
+        self.df["BUY_SIGNAL_BAR"] = self.df["BUY_SIGNAL_BAR"].ffill()
+        self.df["SELL_SIGNAL_BAR"] = self.df["SELL_SIGNAL_BAR"].ffill()
 
-            self.df[event_bar] = np.where(
-                self.df[col], self.df["bar_index"], np.nan
+        self.df["BUY_AGE"] = self.df.index - self.df["BUY_SIGNAL_BAR"]
+        self.df["SELL_AGE"] = self.df.index - self.df["SELL_SIGNAL_BAR"]
+
+        # Age classification
+        self.df["BUY_STATUS"] = np.where(
+            self.df["VALID_BUY_13"],
+            "Fresh",
+            np.where(
+                (self.df["BUY_AGE"] > 0) & (self.df["BUY_AGE"] <= 10),
+                "Active",
+                "Expired"
             )
+        )
 
-            self.df[last_event_bar] = self.df[event_bar].ffill()
-            self.df[age_col] = self.df["bar_index"] - self.df[last_event_bar]
+        self.df["SELL_STATUS"] = np.where(
+            self.df["VALID_SELL_13"],
+            "Fresh",
+            np.where(
+                (self.df["SELL_AGE"] > 0) & (self.df["SELL_AGE"] <= 10),
+                "Active",
+                "Expired"
+            )
+        )
 
-        # ---- TD13 Classification ----
-        def classify_td13(age):
-            if pd.isna(age):
-                return None
-            if age <= 2:
-                return "Fresh"
-            elif age <= 6:
-                return "Active"
-            elif age <= 12:
-                return "Fading"
-            else:
-                return None
+    # =====================================================
+    # 6️⃣ PUBLIC RUN
+    # =====================================================
 
-        # ---- TD9 Classification ----
-        def classify_td9(age):
-            if pd.isna(age):
-                return None
-            if age <= 2:
-                return "Fresh Exhaustion"
-            elif age <= 6:
-                return "Active Exhaustion"
-            else:
-                return None
-
-        self.df["td13_buy_status"] = self.df["td13_buy_age"].apply(classify_td13)
-        self.df["td13_sell_status"] = self.df["td13_sell_age"].apply(classify_td13)
-
-        self.df["td9_buy_status"] = self.df["td9_buy_age"].apply(classify_td9)
-        self.df["td9_sell_status"] = self.df["td9_sell_age"].apply(classify_td9)
-
-    # -----------------------------------------------------
-    # RUN
-    # -----------------------------------------------------
     def run(self):
 
         self.compute_demarker()
         self.compute_setups()
         self.compute_countdown()
         self.validate_td13()
-        self.compute_lifecycle()
+        self.compute_signal_aging()
+
+        # Standardized lowercase mapping (for main.py simplicity)
+        self.df["bull_setup"] = self.df["BULL_SETUP"]
+        self.df["bear_setup"] = self.df["BEAR_SETUP"]
+        self.df["perfect_buy"] = self.df["PERFECT_BUY"]
+        self.df["perfect_sell"] = self.df["PERFECT_SELL"]
+        self.df["bull_countdown"] = self.df["BULL_CD"]
+        self.df["bear_countdown"] = self.df["BEAR_CD"]
+        self.df["valid_buy_13"] = self.df["VALID_BUY_13"]
+        self.df["valid_sell_13"] = self.df["VALID_SELL_13"]
+        self.df["buy_status"] = self.df["BUY_STATUS"]
+        self.df["sell_status"] = self.df["SELL_STATUS"]
+        self.df["buy_age"] = self.df["BUY_AGE"]
+        self.df["sell_age"] = self.df["SELL_AGE"]
 
         return self.df
