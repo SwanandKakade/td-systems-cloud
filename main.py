@@ -46,31 +46,51 @@ def load_master_file():
 
 def fetch_data(token, timeframe, days):
 
-    end = datetime.now()
-    start = end - timedelta(days=days)
+    try:
+        end = datetime.now()
+        start = end - timedelta(days=days)
 
-    url = (
-        f"https://data.definedgesecurities.com/sds/history/NSE/"
-        f"{token}/{timeframe}/"
-        f"{start.strftime('%d%m%Y')}0000/"
-        f"{end.strftime('%d%m%Y')}2359"
-    )
+        url = (
+            f"https://data.definedgesecurities.com/sds/history/NSE/"
+            f"{token}/{timeframe}/"
+            f"{start.strftime('%d%m%Y')}0000/"
+            f"{end.strftime('%d%m%Y')}2359"
+        )
 
-    headers = {"Authorization": DEFINEDGE_SESSION}
-    r = requests.get(url, headers=headers)
+        headers = {"Authorization": DEFINEDGE_SESSION}
 
-    if r.status_code != 200:
+        r = requests.get(url, headers=headers, timeout=10)
+
+        # HTTP failure
+        if r.status_code != 200:
+            logging.warning(f"HTTP error {token}: {r.status_code}")
+            return None
+
+        # Empty body protection
+        if not r.text.strip():
+            logging.warning(f"Empty response for token {token}")
+            return None
+
+        # If HTML returned (session expired case)
+        if "<html" in r.text.lower():
+            logging.warning(f"HTML response for token {token}")
+            return None
+
+        df = pd.read_csv(io.StringIO(r.text))
+
+        if df.empty:
+            return None
+
+        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
+        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+        df = df.sort_values("DATETIME")
+
+        return df
+
+    except Exception as e:
+        logging.warning(f"Fetch error {token}: {e}")
         return None
 
-    df = pd.read_csv(io.StringIO(r.text))
-    if df.empty:
-        return None
-
-    df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
-    df["DATETIME"] = pd.to_datetime(df["DATETIME"])
-    df = df.sort_values("DATETIME")
-
-    return df
 
 
 def run():
