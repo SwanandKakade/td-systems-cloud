@@ -59,7 +59,7 @@ def fetch_data(token, timeframe, days):
 
         headers = {"Authorization": DEFINEDGE_SESSION}
 
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers, timeout=100)
 
         # HTTP failure
         if r.status_code != 200:
