@@ -250,11 +250,8 @@ def run():
         symbol = row["SYMBOL"]
 
         daily_df = fetch_data(token, "day", 200)
-        hourly_df = fetch_data(token, "minute", 10)
-
-        if daily_df is None or hourly_df is None:
-            continue
-
+        if daily_df is None:
+                continue
         try:
             # =========================
             # Liquidity Filter
@@ -272,7 +269,12 @@ def run():
             # Remove penny stocks
             if last_price < 50:
                 continue
+                
+            hourly_df = fetch_data(token, "minute", 10)
 
+            if daily_df is None or hourly_df is None:
+                continue
+                
             # =========================
             # Bias (EMA200 Trend)
             # =========================
