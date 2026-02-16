@@ -61,11 +61,11 @@ def fetch_data(token, timeframe, days):
             f"https://data.definedgesecurities.com/sds/history/NSE/"
             f"{token}/{timeframe}/{from_str}/{to_str}"
         )
-
+        logging.warning(url)
         headers = {"Authorization": DEFINEDGE_SESSION.strip()}
 
         r = requests.get(url, headers=headers, timeout=10)
-
+               logging.warning(r)
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
@@ -102,7 +102,7 @@ def run():
     logging.info("Starting TD Framework v3.0")
 
     master = load_master_file()
-    nifty = fetch_data("26000", "day", 200)
+    nifty = fetch_data(NIFTY_TOKEN, "day", 200)
 
     if nifty is None or nifty.empty:
         print("Failed to fetch NIFTY data")
