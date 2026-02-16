@@ -81,11 +81,12 @@ def fetch_data(token, timeframe, days):
         df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
 
         df["DATETIME"] = pd.to_datetime(
-            df["DATETIME"].astype(str),
-            format="%d%m%Y%H%M",
-            errors="coerce"
-       )
-        
+        df["DATETIME"].astype(str),
+        format="mixed",
+        dayfirst=True,
+        errors="coerce"
+        )
+       
         df = df.dropna(subset=["DATETIME"])
         
         if df.empty:
