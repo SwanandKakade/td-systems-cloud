@@ -104,12 +104,8 @@ def load_master_file():
             (df["EXCHANGE"] == "NSE") &
             (df["SERIES"].isin(["EQ", "IDX"]))
         ]
-    
-        return df.reset_index(drop=True)
-
         logging.info(f"Master filtered symbols: {len(df)}")
-
-        return df
+        return df.reset_index(drop=True)
 
     except Exception as e:
         logging.error(f"Master load failed: {e}")
