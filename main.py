@@ -78,11 +78,20 @@ def fetch_data(token, timeframe, days):
         if df.empty:
             return None
 
-        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
-        df["DATETIME"] = pd.to_datetime(df["DATETIME"], format="%d%m%Y%H%M")
-        df = df.sort_values("DATETIME")
+       df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
 
-        return df
+       df["DATETIME"] = pd.to_datetime(
+            df["DATETIME"].astype(str),
+            format="%d%m%Y%H%M",
+            errors="coerce"
+       )
+        
+       df = df.dropna(subset=["DATETIME"])
+        
+       if df.empty:
+           return None
+        
+       df = df.sort_values("DATETIME")
 
     except Exception as e:
         logging.warning(f"Fetch error {token}: {e}")
@@ -93,9 +102,13 @@ def run():
     logging.info("Starting TD Framework v3.0")
 
     master = load_master_file()
-    nifty = fetch_data(NIFTY_TOKEN, "day", 200)
-    nifty = nifty.set_index("DATETIME")
+    nifty = fetch_data("26000", "day", 200)
 
+    if nifty is None or nifty.empty:
+        print("Failed to fetch NIFTY data")
+    return
+
+    nifty = nifty.set_index("DATETIME")
     results = []
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
