@@ -112,7 +112,7 @@ def fetch_data(token, timeframe, days):
 
         r = requests.get(url, headers=headers, timeout=10)
         logging.warning(r)
-       
+        print(r.text[:500])
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
@@ -155,7 +155,7 @@ def run():
     if nifty_close is None:
      logging.warning("Failed to fetch NIFTY close")
     return
-
+    print(nifty_close)
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
         token = row["TOKEN"]
