@@ -78,20 +78,20 @@ def fetch_data(token, timeframe, days):
         if df.empty:
             return None
 
-       df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
+        df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
 
-       df["DATETIME"] = pd.to_datetime(
+        df["DATETIME"] = pd.to_datetime(
             df["DATETIME"].astype(str),
             format="%d%m%Y%H%M",
             errors="coerce"
        )
         
-       df = df.dropna(subset=["DATETIME"])
+        df = df.dropna(subset=["DATETIME"])
         
-       if df.empty:
+        if df.empty:
            return None
         
-       df = df.sort_values("DATETIME")
+        df = df.sort_values("DATETIME")
 
     except Exception as e:
         logging.warning(f"Fetch error {token}: {e}")
