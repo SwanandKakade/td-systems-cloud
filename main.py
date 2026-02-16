@@ -29,6 +29,51 @@ def send_telegram(message):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+    
+def fetch_yesterday_close(token):
+    try:
+        end = datetime.now()
+        start = end - timedelta(days=3)  # small buffer for weekends
+
+        from_str = start.strftime("%d%m%Y") + "0000"
+        to_str   = end.strftime("%d%m%Y") + "2359"
+
+        url = (
+            f"https://data.definedgesecurities.com/sds/history/NSE/"
+            f"{token}/day/{from_str}/{to_str}"
+        )
+
+        headers = {"Authorization": DEFINEDGE_SESSION.strip()}
+
+        r = requests.get(url, headers=headers, timeout=10)
+
+        if r.status_code != 200:
+            logging.warning(f"NIFTY HTTP error: {r.status_code}")
+            return None
+
+        if not r.text.strip():
+            return None
+
+        # Parse manually instead of pandas mixed parsing
+        rows = []
+        for line in r.text.strip().split("\n"):
+            parts = line.split(",")
+            if len(parts) >= 6:
+                rows.append(parts)
+
+        if not rows:
+            return None
+
+        # Last valid row = latest trading day
+        last_row = rows[-1]
+
+        close_price = float(last_row[4])  # CLOSE column
+
+        return close_price
+
+    except Exception as e:
+        logging.warning(f"NIFTY fetch error: {e}")
+        return None
 
 
 def load_master_file():
@@ -66,8 +111,7 @@ def fetch_data(token, timeframe, days):
 
         r = requests.get(url, headers=headers, timeout=10)
         logging.warning(r)
-        print("Raw response for 26000:")
-        print(r.text[:300])
+       
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
@@ -105,14 +149,11 @@ def run():
     logging.info("Starting TD Framework v3.0")
 
     master = load_master_file()
-    nifty = fetch_data(NIFTY_TOKEN, "day", 1)
+    nifty_close = fetch_yesterday_close(26000)
 
-    if nifty is None or nifty.empty:
-        print("Failed to fetch NIFTY data")
+    if nifty_close is None:
+     logging.warning("Failed to fetch NIFTY close")
     return
-
-    nifty = nifty.set_index("DATETIME")
-    results = []
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
@@ -146,13 +187,15 @@ def run():
             rsuffix="_NIFTY"
         )
 
-        merged["RATIO"] = merged["CLOSE"] / merged["CLOSE_NIFTY"]
-        merged["RATIO_EMA"] = merged["RATIO"].ewm(span=20).mean()
+        # Use yesterday NIFTY close directly
+        merged["RATIO"] = merged["CLOSE"] / nifty_close
 
+        # EMA of ratio
+        merged["RATIO_EMA"] = merged["RATIO"].ewm(span=30, adjust=False).mean()
+
+        # Leadership logic
         ratio_strong = merged["RATIO"].iloc[-1] > merged["RATIO_EMA"].iloc[-1]
         leadership = "Leader" if ratio_strong else "Lagging"
-
-        # Clean Classification
 
         classification = "Neutral"
 
