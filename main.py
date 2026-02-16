@@ -42,11 +42,11 @@ def fetch_yesterday_close(token):
             f"https://data.definedgesecurities.com/sds/history/NSE/"
             f"{token}/day/{from_str}/{to_str}"
         )
-
+        logging.warning(url)
         headers = {"Authorization": DEFINEDGE_SESSION.strip()}
 
         r = requests.get(url, headers=headers, timeout=10)
-
+        logging.warning(r)
         if r.status_code != 200:
             logging.warning(f"NIFTY HTTP error: {r.status_code}")
             return None
