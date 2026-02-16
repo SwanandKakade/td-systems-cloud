@@ -47,6 +47,7 @@ def fetch_yesterday_close(token):
 
         r = requests.get(url, headers=headers, timeout=10)
         logging.warning(r)
+        print(response.text[:500])
         if r.status_code != 200:
             logging.warning(f"NIFTY HTTP error: {r.status_code}")
             return None
