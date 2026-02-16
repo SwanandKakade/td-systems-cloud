@@ -226,6 +226,10 @@ def run():
 
     master = load_master_file()
 
+    if master is None or master.empty:
+        logging.warning("Master file empty.")
+        return
+
     # =========================
     # Fetch Yesterday NIFTY Close
     # =========================
@@ -253,6 +257,23 @@ def run():
 
         try:
             # =========================
+            # Liquidity Filter
+            # =========================
+
+            daily_df["TURNOVER"] = daily_df["CLOSE"] * daily_df["VOLUME"]
+
+            avg_turnover = daily_df["TURNOVER"].rolling(20).mean().iloc[-1]
+            last_price = daily_df["CLOSE"].iloc[-1]
+
+            # Minimum ₹10 Crore average turnover
+            if avg_turnover < 100_000_000:
+                continue
+
+            # Remove penny stocks
+            if last_price < 50:
+                continue
+
+            # =========================
             # Bias (EMA200 Trend)
             # =========================
 
@@ -278,13 +299,17 @@ def run():
             # =========================
 
             stock_close = daily_df["CLOSE"].iloc[-1]
-            ratio = stock_close / nifty_close
 
             ratio_series = daily_df["CLOSE"] / nifty_close
             ratio_ema = ratio_series.ewm(span=30, adjust=False).mean().iloc[-1]
+            ratio = ratio_series.iloc[-1]
 
             ratio_strong = ratio > ratio_ema
             leadership = "Leader" if ratio_strong else "Lagging"
+
+            # Leader-only filter
+            if leadership != "Leader":
+                continue
 
             # =========================
             # Classification
@@ -316,10 +341,6 @@ def run():
             if classification == "Neutral":
                 continue
 
-            # Leader-only filter
-            if leadership != "Leader":
-                continue
-
             # =========================
             # Confidence Score
             # =========================
@@ -345,12 +366,14 @@ def run():
                last_hour["TD13_BUY_STATUS"] in ["Fresh", "Active"]:
                 confidence += 1
 
-            # Store result
+            # =========================
+            # Store Result
+            # =========================
+
             results_data.append({
                 "Symbol": symbol,
                 "Classification": classification,
                 "Bias": bias,
-                "Leadership": leadership,
                 "Confidence": confidence
             })
 
@@ -391,8 +414,6 @@ def run():
         send_telegram(message)
 
     logging.info("Telegram alerts sent successfully.")
-
-
 
 if __name__ == "__main__":
     run()
