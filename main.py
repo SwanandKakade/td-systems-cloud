@@ -65,7 +65,7 @@ def fetch_data(token, timeframe, days):
         headers = {"Authorization": DEFINEDGE_SESSION.strip()}
 
         r = requests.get(url, headers=headers, timeout=10)
-               logging.warning(r)
+        logging.warning(r)
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
