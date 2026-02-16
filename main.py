@@ -69,7 +69,7 @@ def fetch_yesterday_close(token):
         last_row = rows[-1]
 
         close_price = float(last_row[4])  # CLOSE column
-
+        print(close_price)
         return close_price
 
     except Exception as e:
