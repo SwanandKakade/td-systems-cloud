@@ -78,17 +78,38 @@ def fetch_yesterday_close(token):
 
 
 def load_master_file():
-    response = requests.get(MASTER_URL)
-    z = zipfile.ZipFile(io.BytesIO(response.content))
-    df = pd.read_csv(z.open(z.namelist()[0]))
-    df.columns = [
-        "EXCHANGE","TOKEN","SYMBOL","TRADINGSYM",
-        "INSTRUMENTTYPE","EXPIRY","TICKSIZE","LOTSIZE",
-        "OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
-        "ISIN","PRICEMULT","COMPANY"
-    ]
-    return df[df["INSTRUMENTTYPE"] == "EQ"]
+    try:
+        response = requests.get(MASTER_URL, timeout=10)
+        response.raise_for_status()
 
+        z = zipfile.ZipFile(io.BytesIO(response.content))
+        df = pd.read_csv(z.open(z.namelist()[0]))
+
+        df.columns = [
+            "EXCHANGE","TOKEN","SYMBOL","TRADINGSYM",
+            "INSTRUMENTTYPE","EXPIRY","TICKSIZE","LOTSIZE",
+            "OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
+            "ISIN","PRICEMULT","COMPANY"
+        ]
+
+        # ✅ Keep only tradable instruments
+        df = df[df["INSTRUMENTTYPE"].isin(["EQ", "IDX"])]
+
+        # ✅ Remove weird trading series like BE / BL if present
+        df = df[~df["TRADINGSYM"].str.contains("-BE|-BL", na=False)]
+
+        # ✅ Ensure token is numeric
+        df["TOKEN"] = pd.to_numeric(df["TOKEN"], errors="coerce")
+        df = df.dropna(subset=["TOKEN"])
+        df = df.reset_index(drop=True)
+
+        logging.info(f"Master filtered symbols: {len(df)}")
+
+        return df
+
+    except Exception as e:
+        logging.error(f"Master load failed: {e}")
+        return None
 
 def fetch_data(token, timeframe, days):
 
@@ -96,23 +117,31 @@ def fetch_data(token, timeframe, days):
         end = datetime.now()
         start = end - timedelta(days=days)
 
+        # --------------------------
+        # Build date strings
+        # --------------------------
+
         if timeframe == "day":
             from_str = start.strftime("%d%m%Y") + "0000"
             to_str   = end.strftime("%d%m%Y") + "2359"
-        else:
+
+        elif timeframe == "minute":
             from_str = start.strftime("%d%m%Y%H%M")
             to_str   = end.strftime("%d%m%Y%H%M")
+
+        else:
+            logging.warning(f"Invalid timeframe requested: {timeframe}")
+            return None
 
         url = (
             f"https://data.definedgesecurities.com/sds/history/NSE/"
             f"{token}/{timeframe}/{from_str}/{to_str}"
         )
-        logging.warning(url)
+
         headers = {"Authorization": DEFINEDGE_SESSION.strip()}
 
         r = requests.get(url, headers=headers, timeout=10)
-        logging.warning(r)
-        print(r.text[:500])
+
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
@@ -120,26 +149,58 @@ def fetch_data(token, timeframe, days):
         if not r.text.strip():
             return None
 
-        df = pd.read_csv(io.StringIO(r.text))
+        # --------------------------
+        # Read CSV safely
+        # --------------------------
+
+        df = pd.read_csv(
+            io.StringIO(r.text),
+            header=None
+        )
 
         if df.empty:
             return None
 
         df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
 
+        # --------------------------
+        # Correct datetime parsing
+        # Definedge format: ddmmyyyyHHMM
+        # --------------------------
+
         df["DATETIME"] = pd.to_datetime(
-        df["DATETIME"].astype(str),
-        format="mixed",
-        dayfirst=True,
-        errors="coerce"
+            df["DATETIME"].astype(str),
+            format="%d%m%Y%H%M",
+            errors="coerce"
         )
-       
+
         df = df.dropna(subset=["DATETIME"])
-        
+
         if df.empty:
-           return None
-        
+            return None
+
         df = df.sort_values("DATETIME")
+
+        # --------------------------
+        # If minute timeframe, resample to 60min
+        # --------------------------
+
+        if timeframe == "minute":
+
+            df = df.set_index("DATETIME")
+
+            df = df.resample("60min").agg({
+                "OPEN": "first",
+                "HIGH": "max",
+                "LOW": "min",
+                "CLOSE": "last",
+                "VOLUME": "sum"
+            })
+
+            df = df.dropna()
+            df = df.reset_index()
+
+        return df
 
     except Exception as e:
         logging.warning(f"Fetch error {token}: {e}")
@@ -169,7 +230,7 @@ def run():
             symbol = row["SYMBOL"]
 
             daily_df = fetch_data(token, "day", 200)
-            hourly_df = fetch_data(token, "60", 30)
+            hourly_df = fetch_data(token, "minute", 10)
 
             if daily_df is None or hourly_df is None:
                 continue
