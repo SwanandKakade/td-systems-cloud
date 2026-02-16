@@ -50,37 +50,27 @@ def fetch_data(token, timeframe, days):
         end = datetime.now()
         start = end - timedelta(days=days)
 
-        start_str = start.strftime("%d%m%Y") + "0000"
-        end_str = end.strftime("%d%m%Y%H%M")  # use real current time
-        
+        if timeframe == "day":
+            from_str = start.strftime("%d%m%Y") + "0000"
+            to_str   = end.strftime("%d%m%Y") + "2359"
+        else:
+            from_str = start.strftime("%d%m%Y%H%M")
+            to_str   = end.strftime("%d%m%Y%H%M")
+
         url = (
             f"https://data.definedgesecurities.com/sds/history/NSE/"
-            f"{token}/{timeframe}/"
-            f"{start_str}/"
-            f"{end_str}"
+            f"{token}/{timeframe}/{from_str}/{to_str}"
         )
 
-        logging.warning(f"URL: {url}")
-        headers = {
-                    "Authorization": DEFINEDGE_SESSION.strip()
-                }
-        print("Session:", DEFINEDGE_SESSION)
-        print("Header:", headers)
+        headers = {"Authorization": DEFINEDGE_SESSION.strip()}
+
         r = requests.get(url, headers=headers, timeout=10)
 
-        # HTTP failure
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
 
-        # Empty body protection
         if not r.text.strip():
-            logging.warning(f"Empty response for token {token}")
-            return None
-
-        # If HTML returned (session expired case)
-        if "<html" in r.text.lower():
-            logging.warning(f"HTML response for token {token}")
             return None
 
         df = pd.read_csv(io.StringIO(r.text))
@@ -89,7 +79,7 @@ def fetch_data(token, timeframe, days):
             return None
 
         df.columns = ["DATETIME","OPEN","HIGH","LOW","CLOSE","VOLUME"]
-        df["DATETIME"] = pd.to_datetime(df["DATETIME"])
+        df["DATETIME"] = pd.to_datetime(df["DATETIME"], format="%d%m%Y%H%M")
         df = df.sort_values("DATETIME")
 
         return df
@@ -97,8 +87,6 @@ def fetch_data(token, timeframe, days):
     except Exception as e:
         logging.warning(f"Fetch error {token}: {e}")
         return None
-
-
 
 def run():
 
