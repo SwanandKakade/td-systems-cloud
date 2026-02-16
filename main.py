@@ -149,109 +149,144 @@ def run():
 
     logging.info("Starting TD Framework v3.0")
 
+    results = []
+
     master = load_master_file()
+
+    # Fetch yesterday NIFTY close once
     nifty_close = fetch_yesterday_close(26000)
 
     if nifty_close is None:
-     logging.warning("Failed to fetch NIFTY close")
-    return
-    print(nifty_close)
+        logging.warning("Failed to fetch NIFTY close")
+        return
+
+    logging.info(f"NIFTY Close: {nifty_close}")
+
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
-        token = row["TOKEN"]
-        symbol = row["SYMBOL"]
+        try:
+            token = row["TOKEN"]
+            symbol = row["SYMBOL"]
 
-        daily_df = fetch_data(token, "day", 200)
-        hourly_df = fetch_data(token, "60", 30)
+            daily_df = fetch_data(token, "day", 200)
+            hourly_df = fetch_data(token, "60", 30)
 
-        if daily_df is None or hourly_df is None:
+            if daily_df is None or hourly_df is None:
+                continue
+
+            if daily_df.empty or hourly_df.empty:
+                continue
+
+            # =========================
+            # Bias (EMA200)
+            # =========================
+
+            daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200, adjust=False).mean()
+
+            bullish_bias = daily_df["CLOSE"].iloc[-1] > daily_df["EMA200"].iloc[-1]
+            bias = "Bullish" if bullish_bias else "Bearish"
+
+            # =========================
+            # Run DeMark Engine
+            # =========================
+
+            daily_engine = DeMarkEngine(daily_df)
+            hour_engine = DeMarkEngine(hourly_df)
+
+            daily = daily_engine.run()
+            hourly = hour_engine.run()
+
+            last_daily = daily.iloc[-1]
+            last_hour = hourly.iloc[-1]
+
+            # =========================
+            # Ratio Leadership (Using Only NIFTY Close)
+            # =========================
+
+            ratio_series = daily_df["CLOSE"] / nifty_close
+            ratio_ema = ratio_series.ewm(span=30, adjust=False).mean()
+
+            ratio_strong = ratio_series.iloc[-1] > ratio_ema.iloc[-1]
+            leadership = "Leader" if ratio_strong else "Lagging"
+
+            # =========================
+            # Clean Classification
+            # =========================
+
+            classification = "Neutral"
+
+            if last_daily["TD13_SELL_STATUS"] in ["Fresh", "Active"] and \
+               last_hour["TD13_SELL_STATUS"] in ["Fresh", "Active"]:
+                classification = "Strong Sell"
+
+            elif bullish_bias and \
+                 last_hour["TD13_BUY_STATUS"] in ["Fresh", "Active"]:
+                classification = "Fresh Buy"
+
+            elif last_daily["TD9_BUY_STATUS"] in ["Fresh", "Active"]:
+                classification = "Early Buy Exhaustion"
+
+            elif last_daily["TD9_SELL_STATUS"] in ["Fresh", "Active"]:
+                classification = "Early Sell Exhaustion"
+
+            elif last_hour["TD9_BUY_STATUS"] in ["Fresh", "Active"]:
+                classification = "Intraday Buy Exhaustion"
+
+            elif last_hour["TD9_SELL_STATUS"] in ["Fresh", "Active"]:
+                classification = "Intraday Sell Exhaustion"
+
+            # =========================
+            # Confidence Scoring (0–6)
+            # =========================
+
+            confidence = 0
+
+            if last_daily["TD13_BUY_STATUS"] in ["Fresh", "Active"] or \
+               last_daily["TD13_SELL_STATUS"] in ["Fresh", "Active"]:
+                confidence += 2
+
+            if last_hour["TD13_BUY_STATUS"] in ["Fresh", "Active"] or \
+               last_hour["TD13_SELL_STATUS"] in ["Fresh", "Active"]:
+                confidence += 1
+
+            if ratio_strong:
+                confidence += 1
+
+            if last_hour["TD13_BUY_AGE"] <= 3 or \
+               last_hour["TD13_SELL_AGE"] <= 3:
+                confidence += 1
+
+            if bullish_bias and \
+               last_hour["TD13_BUY_STATUS"] in ["Fresh", "Active"]:
+                confidence += 1
+
+            # =========================
+            # Append Result
+            # =========================
+
+            results.append(
+                f"{symbol:<12} | {classification:<22} | "
+                f"Bias: {bias:<8} | {leadership:<8} | "
+                f"Score: {confidence}/6"
+            )
+
+        except Exception as e:
+            logging.warning(f"Error processing {symbol}: {e}")
             continue
 
-        daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200).mean()
+    # =========================
+    # Send Telegram
+    # =========================
 
-        daily_engine = DeMarkEngine(daily_df)
-        hour_engine = DeMarkEngine(hourly_df)
+    if not results:
+        logging.info("No signals generated.")
+        return
 
-        daily = daily_engine.run()
-        hourly = hour_engine.run()
+    message = "📊 Signals\n\n" + "\n".join(results[:500])
 
-        last_daily = daily.iloc[-1]
-        last_hour = hourly.iloc[-1]
-
-        bullish_bias = daily_df["CLOSE"].iloc[-1] > daily_df["EMA200"].iloc[-1]
-        bias = "Bullish" if bullish_bias else "Bearish"
-
-        # Ratio
-        merged = daily_df.set_index("DATETIME").join(
-            nifty["CLOSE"],
-            how="inner",
-            rsuffix="_NIFTY"
-        )
-
-        # Use yesterday NIFTY close directly
-        merged["RATIO"] = merged["CLOSE"] / nifty_close
-
-        # EMA of ratio
-        merged["RATIO_EMA"] = merged["RATIO"].ewm(span=30, adjust=False).mean()
-
-        # Leadership logic
-        ratio_strong = merged["RATIO"].iloc[-1] > merged["RATIO_EMA"].iloc[-1]
-        leadership = "Leader" if ratio_strong else "Lagging"
-
-        classification = "Neutral"
-
-        if last_daily["TD13_SELL_STATUS"] in ["Fresh","Active"] and \
-           last_hour["TD13_SELL_STATUS"] in ["Fresh","Active"]:
-            classification = "Strong Sell"
-
-        elif bullish_bias and \
-             last_hour["TD13_BUY_STATUS"] in ["Fresh","Active"]:
-            classification = "Fresh Buy"
-
-        elif last_daily["TD9_BUY_STATUS"] in ["Fresh","Active"]:
-            classification = "Early Buy Exhaustion"
-
-        elif last_daily["TD9_SELL_STATUS"] in ["Fresh","Active"]:
-            classification = "Early Sell Exhaustion"
-
-        elif last_hour["TD9_BUY_STATUS"] in ["Fresh","Active"]:
-            classification = "Intraday Buy Exhaustion"
-
-        elif last_hour["TD9_SELL_STATUS"] in ["Fresh","Active"]:
-            classification = "Intraday Sell Exhaustion"
-
-        # Confidence
-
-        confidence = 0
-
-        if last_daily["TD13_BUY_STATUS"] in ["Fresh","Active"] or \
-           last_daily["TD13_SELL_STATUS"] in ["Fresh","Active"]:
-            confidence += 2
-
-        if last_hour["TD13_BUY_STATUS"] in ["Fresh","Active"] or \
-           last_hour["TD13_SELL_STATUS"] in ["Fresh","Active"]:
-            confidence += 1
-
-        if ratio_strong:
-            confidence += 1
-
-        if last_hour["TD13_BUY_AGE"] <= 3 or \
-           last_hour["TD13_SELL_AGE"] <= 3:
-            confidence += 1
-
-        if bullish_bias and \
-           last_hour["TD13_BUY_STATUS"] in ["Fresh","Active"]:
-            confidence += 1
-
-        results.append(
-            f"{symbol:<12} | {classification:<22} | "
-            f"Bias: {bias:<8} | {leadership:<8} | "
-            f"Score: {confidence}/6"
-        )
-
-    message = "📊 Signal\n\n" + "\n".join(results[:40])
     send_telegram(message)
 
+    logging.info("Telegram message sent successfully.")
 
 if __name__ == "__main__":
     run()
