@@ -67,7 +67,7 @@ def fetch_data(token, timeframe, days):
         r = requests.get(url, headers=headers, timeout=10)
         logging.warning(r)
         print("Raw response for 26000:")
-        print(response.text[:300])
+        print(r.text[:300])
         if r.status_code != 200:
             logging.warning(f"HTTP error {token}: {r.status_code}")
             return None
