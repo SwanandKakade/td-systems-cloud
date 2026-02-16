@@ -243,7 +243,7 @@ def run():
         symbol = row["SYMBOL"]
 
         daily_df = fetch_data(token, "day", 200)
-        hourly_df = fetch_data(token, "60", 10)
+        hourly_df = fetch_data(token, "minute", 10)
 
         if daily_df is None or hourly_df is None:
             continue
