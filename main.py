@@ -105,7 +105,7 @@ def run():
     logging.info("Starting TD Framework v3.0")
 
     master = load_master_file()
-    nifty = fetch_data(NIFTY_TOKEN, "day", 200)
+    nifty = fetch_data(NIFTY_TOKEN, "day", 1)
 
     if nifty is None or nifty.empty:
         print("Failed to fetch NIFTY data")
