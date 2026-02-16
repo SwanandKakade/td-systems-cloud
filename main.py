@@ -29,7 +29,16 @@ def send_telegram(message):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-    
+
+def send_document(file_path):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    with open(file_path, "rb") as f:
+        requests.post(
+            url,
+            data={"chat_id": CHAT_ID},
+            files={"document": f}
+        )
+   
 def fetch_yesterday_close(token):
     try:
         end = datetime.now()
@@ -210,68 +219,72 @@ def run():
 
     logging.info("Starting TD Framework v3.0")
 
-    results = []
+    results_data = []
 
     master = load_master_file()
 
-    # Fetch yesterday NIFTY close once
+    # =========================
+    # Fetch Yesterday NIFTY Close
+    # =========================
+
     nifty_close = fetch_yesterday_close(26000)
 
     if nifty_close is None:
         logging.warning("Failed to fetch NIFTY close")
         return
 
-    logging.info(f"NIFTY Close: {nifty_close}")
+    # =========================
+    # Scan Symbols
+    # =========================
 
     for _, row in tqdm(master.iterrows(), total=len(master)):
 
+        token = row["TOKEN"]
+        symbol = row["SYMBOL"]
+
+        daily_df = fetch_data(token, "day", 200)
+        hourly_df = fetch_data(token, "60", 10)
+
+        if daily_df is None or hourly_df is None:
+            continue
+
         try:
-            token = row["TOKEN"]
-            symbol = row["SYMBOL"]
-
-            daily_df = fetch_data(token, "day", 200)
-            hourly_df = fetch_data(token, "minute", 10)
-
-            if daily_df is None or hourly_df is None:
-                continue
-
-            if daily_df.empty or hourly_df.empty:
-                continue
-
             # =========================
-            # Bias (EMA200)
+            # Bias (EMA200 Trend)
             # =========================
 
-            daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200, adjust=False).mean()
-
+            daily_df["EMA200"] = daily_df["CLOSE"].ewm(span=200).mean()
             bullish_bias = daily_df["CLOSE"].iloc[-1] > daily_df["EMA200"].iloc[-1]
             bias = "Bullish" if bullish_bias else "Bearish"
 
             # =========================
-            # Run DeMark Engine
+            # DeMark Engine
             # =========================
 
             daily_engine = DeMarkEngine(daily_df)
-            hour_engine = DeMarkEngine(hourly_df)
+            hourly_engine = DeMarkEngine(hourly_df)
 
             daily = daily_engine.run()
-            hourly = hour_engine.run()
+            hourly = hourly_engine.run()
 
             last_daily = daily.iloc[-1]
             last_hour = hourly.iloc[-1]
 
             # =========================
-            # Ratio Leadership (Using Only NIFTY Close)
+            # Ratio Leadership
             # =========================
 
-            ratio_series = daily_df["CLOSE"] / nifty_close
-            ratio_ema = ratio_series.ewm(span=30, adjust=False).mean()
+            stock_close = daily_df["CLOSE"].iloc[-1]
+            ratio = stock_close / nifty_close
 
-            ratio_strong = ratio_series.iloc[-1] > ratio_ema.iloc[-1]
+            ratio_series = daily_df["CLOSE"] / nifty_close
+            ratio_ema = ratio_series.ewm(span=30, adjust=False).mean().iloc[-1]
+
+            ratio_strong = ratio > ratio_ema
             leadership = "Leader" if ratio_strong else "Lagging"
 
             # =========================
-            # Clean Classification
+            # Classification
             # =========================
 
             classification = "Neutral"
@@ -296,8 +309,16 @@ def run():
             elif last_hour["TD9_SELL_STATUS"] in ["Fresh", "Active"]:
                 classification = "Intraday Sell Exhaustion"
 
+            # Skip Neutral
+            if classification == "Neutral":
+                continue
+
+            # Leader-only filter
+            if leadership != "Leader":
+                continue
+
             # =========================
-            # Confidence Scoring (0–6)
+            # Confidence Score
             # =========================
 
             confidence = 0
@@ -313,41 +334,62 @@ def run():
             if ratio_strong:
                 confidence += 1
 
-            if last_hour["TD13_BUY_AGE"] <= 3 or \
-               last_hour["TD13_SELL_AGE"] <= 3:
+            if last_hour.get("TD13_BUY_AGE", 99) <= 3 or \
+               last_hour.get("TD13_SELL_AGE", 99) <= 3:
                 confidence += 1
 
             if bullish_bias and \
                last_hour["TD13_BUY_STATUS"] in ["Fresh", "Active"]:
                 confidence += 1
 
-            # =========================
-            # Append Result
-            # =========================
-
-            results.append(
-                f"{symbol:<12} | {classification:<22} | "
-                f"Bias: {bias:<8} | {leadership:<8} | "
-                f"Score: {confidence}/6"
-            )
+            # Store result
+            results_data.append({
+                "Symbol": symbol,
+                "Classification": classification,
+                "Bias": bias,
+                "Leadership": leadership,
+                "Confidence": confidence
+            })
 
         except Exception as e:
             logging.warning(f"Error processing {symbol}: {e}")
             continue
 
     # =========================
-    # Send Telegram
+    # Send Telegram Messages
     # =========================
 
-    if not results:
-        logging.info("No signals generated.")
+    if not results_data:
+        logging.info("No leader signals generated.")
         return
 
-    message = "📊 Signals\n\n" + "\n".join(results[:500])
+    df = pd.DataFrame(results_data)
 
-    send_telegram(message)
-    print(message)
-    logging.info("Telegram message sent successfully.")
+    # Group by classification
+    for classification in df["Classification"].unique():
+
+        group_df = df[df["Classification"] == classification]
+        group_df = group_df.sort_values("Confidence", ascending=False)
+
+        message_lines = []
+
+        for _, row in group_df.iterrows():
+            message_lines.append(
+                f"{row['Symbol']} | "
+                f"{row['Bias']} | "
+                f"Score: {row['Confidence']}/6"
+            )
+
+        message = (
+            f"📊 {classification} (Leader Only)\n\n" +
+            "\n".join(message_lines)
+        )
+
+        send_telegram(message)
+
+    logging.info("Telegram alerts sent successfully.")
+
+
 
 if __name__ == "__main__":
     run()
