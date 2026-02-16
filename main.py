@@ -346,7 +346,7 @@ def run():
     message = "📊 Signals\n\n" + "\n".join(results[:500])
 
     send_telegram(message)
-
+    print(message)
     logging.info("Telegram message sent successfully.")
 
 if __name__ == "__main__":
