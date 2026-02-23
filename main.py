@@ -38,6 +38,18 @@ def send_document(file_path):
             data={"chat_id": CHAT_ID},
             files={"document": f}
         )
+def fetch_nifty200_list():
+
+    url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
+
+    try:
+        df = pd.read_csv(url)
+        symbols = df["Symbol"].unique().tolist()
+        return symbols
+
+    except Exception as e:
+        logging.warning(f"Failed to fetch Nifty200 list: {e}")
+        return []
    
 def fetch_yesterday_close(token):
     try:
@@ -229,7 +241,17 @@ def run():
     if master is None or master.empty:
         logging.warning("Master file empty.")
         return
+  
+    nifty200_symbols = fetch_nifty200_list()
+    
+    if not nifty200_symbols:
+        logging.warning("Nifty 200 list empty.")
+        return
+    
+    # Filter master to only Nifty 200 symbols
+    master = master[master["SYMBOL"].isin(nifty200_symbols)]
 
+    logging.info(f"Scanning {len(master)} Nifty 200 stocks")
     # =========================
     # Fetch Yesterday NIFTY Close
     # =========================
